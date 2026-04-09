@@ -9,13 +9,13 @@ const BEATS = 8;
 const BPM = 92; // quarter note tempo, stately
 
 const SOLUTION: boolean[][] = [
-  [false, false, false,  true,  true, false, false, false], // G4: [2]
-  [ true,  true,  true,  true, false,  true, false, false], // F4: [4, 1]
-  [ true,  true,  true, false, false,  true,  true, false], // E4: [3, 2]
-  [ true, false, false, false, false, false, false,  true], // D4: [1, 1]
-  [ true, false, false, false, false,  true,  true,  true], // C4: [1, 3]
-  [ true,  true,  true,  true,  true,  true,  true, false], // G3: [7]
-  [ true, false,  true,  true, false,  true,  true,  true], // C3: [1, 2, 3]
+  [ true, false, false,  true,  true, false,  true,  true], // G4: [1, 2, 2]
+  [false, false,  true, false, false,  true, false,  true], // F4: [1, 1, 1]
+  [ true,  true, false, false, false, false,  true, false], // E4: [2, 1]
+  [false, false, false, false, false,  true, false,  true], // D4: [1, 1]
+  [false, false, false,  true,  true,  true, false, false], // C4: [3]
+  [ true,  true, false,  true,  true, false,  true,  true], // G3: [2, 2, 2]
+  [ true, false, false,  true, false,  true, false,  true], // C3: [1, 1, 1, 1]
 ];
 
 // --- Clue computation ---
