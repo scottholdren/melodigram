@@ -1,0 +1,209 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a0f;
+  color: #e0e0e0;
+  font-family: system-ui, -apple-system, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 300;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 0;
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: #555;
+  font-style: italic;
+  margin-top: -0.5rem;
+}
+
+/* --- Puzzle table layout --- */
+.puzzle-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Column clues row (top) */
+.col-clue-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.corner {
+  width: 80px;
+  min-width: 80px;
+}
+
+.corner-right {
+  width: 44px;
+  min-width: 44px;
+}
+
+.col-clue {
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  padding-bottom: 6px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #888;
+}
+
+.col-clue span {
+  display: block;
+  line-height: 1.3;
+}
+
+.col-clue .clue-pad {
+  visibility: hidden;
+}
+
+.col-clue .clue-pad::before {
+  content: "0";
+}
+
+.col-clue .clue-zero {
+  color: #444;
+}
+
+/* Grid rows */
+.puzzle-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Row clues (left) */
+.row-clue {
+  width: 80px;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 10px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #888;
+  white-space: nowrap;
+}
+
+/* Pitch labels (right) */
+.pitch-label {
+  width: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+  font-size: 0.7rem;
+  font-family: monospace;
+  color: #555;
+}
+
+/* Cells */
+.cell {
+  width: 44px;
+  height: 44px;
+  background: #14141e;
+  border: 1px solid #22223a;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 0.08s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: #555;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cell.even-beat {
+  background: #18182a;
+}
+
+.cell:hover {
+  border-color: #44446a;
+}
+
+.cell.filled {
+  border-color: transparent;
+}
+
+.cell.marked {
+  color: #555;
+  font-size: 0.65rem;
+  font-weight: bold;
+}
+
+.cell.active-col {
+  border-color: #ffffff22;
+  background: #1e1e38;
+}
+
+.cell.active-col.even-beat {
+  background: #222240;
+}
+
+.cell.playing {
+  transform: scale(1.1);
+  z-index: 1;
+}
+
+/* --- Controls --- */
+.controls {
+  display: flex;
+  gap: 1rem;
+}
+
+button {
+  background: #1a1a2e;
+  color: #ccc;
+  border: 1px solid #3a3a5e;
+  padding: 0.6rem 1.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  letter-spacing: 0.05em;
+}
+
+button:hover {
+  background: #2a2a4e;
+  border-color: #5a5a8e;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #555;
+  text-align: center;
+}
