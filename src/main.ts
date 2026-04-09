@@ -1,22 +1,6 @@
-import * as Tone from "tone";
 import { solve } from "./solver";
-
-// --- Ode to Joy (first phrase) with harmony ---
-// Melody: E4 E4 F4 G4 G4 F4 E4 D4
-// Plus bass (C3, G3) and harmony (C4) for nonogram solvability
-const PITCHES = ["G4", "F4", "E4", "D4", "C4", "G3", "C3"];
-const BEATS = 8;
-const BPM = 92; // quarter note tempo, stately
-
-const SOLUTION: boolean[][] = [
-  [ true, false, false,  true,  true, false,  true,  true], // G4: [1, 2, 2]
-  [false, false,  true, false, false,  true, false,  true], // F4: [1, 1, 1]
-  [ true,  true, false, false, false, false,  true, false], // E4: [2, 1]
-  [false, false, false, false, false,  true, false,  true], // D4: [1, 1]
-  [false, false, false,  true,  true,  true, false, false], // C4: [3]
-  [ true,  true, false,  true,  true, false,  true,  true], // G3: [2, 2, 2]
-  [ true, false, false,  true, false,  true, false,  true], // C3: [1, 1, 1, 1]
-];
+import { loadPiano, ensureAudio, playNote, scheduleNote, getTransport, isSamplerReady } from "./audio";
+import { ALL_PUZZLES, type Puzzle } from "./puzzles";
 
 // --- Clue computation ---
 function computeClues(line: boolean[]): number[] {
@@ -29,17 +13,7 @@ function computeClues(line: boolean[]): number[] {
   return clues;
 }
 
-const rowClues = SOLUTION.map((row) => computeClues(row));
-const colClues: number[][] = [];
-for (let col = 0; col < BEATS; col++) {
-  colClues.push(computeClues(SOLUTION.map((row) => row[col])));
-}
-
-// Verify
-const verification = solve(PITCHES.length, BEATS, rowClues, colClues);
-console.log(verification.solved ? "Puzzle verified: uniquely solvable" : "WARNING: not solvable");
-
-// --- Colors by note letter ---
+// --- Color mapping ---
 const NOTE_COLORS: Record<string, string> = {
   C: "#ff3355", D: "#ff8833", E: "#ffdd33",
   F: "#33dd77", G: "#33ccff", A: "#5566ff", B: "#aa44ff",
@@ -49,164 +23,50 @@ function getNoteColor(note: string): string {
   return NOTE_COLORS[note.replace(/[0-9#b]/g, "")] || "#888";
 }
 
-// --- State ---
+// --- Game state ---
 type CellState = "empty" | "filled" | "marked";
-const grid: CellState[][] = Array.from({ length: PITCHES.length }, () =>
-  Array(BEATS).fill("empty")
-);
+let currentPuzzle: Puzzle;
+let grid: CellState[][];
+let rowClues: number[][];
+let colClues: number[][];
+let cells: HTMLDivElement[][];
 let isPlaying = false;
-let audioStarted = false;
 let isSolved = false;
 
-// --- Synth ---
-let synth: Tone.PolySynth | null = null;
-
-function getSynth(): Tone.PolySynth {
-  if (!synth) {
-    synth = new Tone.PolySynth(Tone.Synth, {
-      maxPolyphony: 16,
-      voice: Tone.Synth,
-      options: {
-        oscillator: { type: "triangle" },
-        envelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 1.0 },
-      },
-    }).toDestination();
-  }
-  return synth;
-}
-
-async function ensureAudio(): Promise<void> {
-  if (!audioStarted) {
-    await Tone.start();
-    Tone.getTransport().bpm.value = BPM;
-    audioStarted = true;
-  }
-}
-
-// --- Check win ---
-function checkSolved(): boolean {
-  for (let r = 0; r < PITCHES.length; r++) {
-    for (let c = 0; c < BEATS; c++) {
-      if ((grid[r][c] === "filled") !== SOLUTION[r][c]) return false;
-    }
-  }
-  return true;
-}
-
-// --- Build UI ---
+// DOM elements
 const app = document.getElementById("app")!;
 
+// --- Puzzle selector ---
+const nav = document.createElement("div");
+nav.className = "nav";
+app.appendChild(nav);
+
+ALL_PUZZLES.forEach((puzzle) => {
+  const btn = document.createElement("button");
+  btn.className = "nav-btn";
+  btn.textContent = puzzle.id === "ode-to-joy" ? "Ode to Joy" : "The Entertainer";
+  btn.addEventListener("click", () => loadPuzzle(puzzle));
+  nav.appendChild(btn);
+});
+
+// --- Main containers ---
 const title = document.createElement("h1");
 title.textContent = "Melodigram";
 app.appendChild(title);
 
 const subtitle = document.createElement("p");
 subtitle.className = "subtitle";
-subtitle.textContent = "Can you hear it?";
 app.appendChild(subtitle);
+
+const loadingEl = document.createElement("p");
+loadingEl.className = "loading";
+loadingEl.textContent = "Loading piano...";
+app.appendChild(loadingEl);
 
 const puzzleTable = document.createElement("div");
 puzzleTable.className = "puzzle-table";
 app.appendChild(puzzleTable);
 
-const maxColClueLen = Math.max(...colClues.map((c) => c.length || 1));
-
-// Column clues (top)
-const colClueRow = document.createElement("div");
-colClueRow.className = "col-clue-row";
-const corner = document.createElement("div");
-corner.className = "corner";
-colClueRow.appendChild(corner);
-
-for (let col = 0; col < BEATS; col++) {
-  const clueCell = document.createElement("div");
-  clueCell.className = "col-clue";
-  const clue = colClues[col];
-  const padding = maxColClueLen - (clue.length || 1);
-  let html = "";
-  for (let i = 0; i < padding; i++) html += '<span class="clue-pad">&nbsp;</span>';
-  if (clue.length === 0) {
-    html += '<span class="clue-zero">0</span>';
-  } else {
-    html += clue.map((n) => `<span>${n}</span>`).join("");
-  }
-  clueCell.innerHTML = html;
-  colClueRow.appendChild(clueCell);
-}
-
-const cornerRight = document.createElement("div");
-cornerRight.className = "corner-right";
-colClueRow.appendChild(cornerRight);
-puzzleTable.appendChild(colClueRow);
-
-// Grid rows
-const cells: HTMLDivElement[][] = [];
-
-for (let row = 0; row < PITCHES.length; row++) {
-  cells[row] = [];
-  const rowEl = document.createElement("div");
-  rowEl.className = "puzzle-row";
-
-  const rowClueEl = document.createElement("div");
-  rowClueEl.className = "row-clue";
-  const clue = rowClues[row];
-  rowClueEl.textContent = clue.length === 0 ? "0" : clue.join("  ");
-  rowEl.appendChild(rowClueEl);
-
-  for (let col = 0; col < BEATS; col++) {
-    const cell = document.createElement("div");
-    cell.className = "cell";
-    if (col % 2 === 0) cell.classList.add("even-beat");
-
-    cell.addEventListener("click", async () => {
-      if (isPlaying || isSolved) return;
-      await ensureAudio();
-      const note = PITCHES[row];
-
-      if (grid[row][col] === "empty") {
-        grid[row][col] = "filled";
-        cell.classList.add("filled");
-        cell.classList.remove("marked");
-        cell.textContent = "";
-        cell.style.backgroundColor = getNoteColor(note);
-        cell.style.boxShadow = `0 0 15px ${getNoteColor(note)}66`;
-        getSynth().triggerAttackRelease(note, "8n");
-      } else if (grid[row][col] === "filled") {
-        grid[row][col] = "marked";
-        cell.classList.remove("filled");
-        cell.classList.add("marked");
-        cell.style.backgroundColor = "";
-        cell.style.boxShadow = "";
-        cell.textContent = "X";
-      } else {
-        grid[row][col] = "empty";
-        cell.classList.remove("filled", "marked");
-        cell.style.backgroundColor = "";
-        cell.style.boxShadow = "";
-        cell.textContent = "";
-      }
-
-      if (!isSolved && checkSolved()) {
-        isSolved = true;
-        subtitle.textContent = "Ode to Joy — Beethoven";
-        hint.textContent = "Solved!";
-        await playMelody();
-      }
-    });
-
-    rowEl.appendChild(cell);
-    cells[row][col] = cell;
-  }
-
-  const pitchLabel = document.createElement("div");
-  pitchLabel.className = "pitch-label";
-  pitchLabel.textContent = PITCHES[row];
-  rowEl.appendChild(pitchLabel);
-
-  puzzleTable.appendChild(rowEl);
-}
-
-// Controls
 const controls = document.createElement("div");
 controls.className = "controls";
 app.appendChild(controls);
@@ -224,19 +84,185 @@ hint.className = "hint";
 hint.textContent = "Click: fill · Again: mark X · Again: clear";
 app.appendChild(hint);
 
+// --- Load piano samples on start ---
+loadPiano().then(() => {
+  loadingEl.style.display = "none";
+});
+
+// --- Load a puzzle ---
+function loadPuzzle(puzzle: Puzzle) {
+  if (isPlaying) return;
+  currentPuzzle = puzzle;
+  isSolved = false;
+
+  const PITCHES = puzzle.pitches;
+  const BEATS = puzzle.solution[0].length;
+
+  // Compute clues
+  rowClues = puzzle.solution.map((row) => computeClues(row));
+  colClues = [];
+  for (let col = 0; col < BEATS; col++) {
+    colClues.push(computeClues(puzzle.solution.map((row) => row[col])));
+  }
+
+  // Verify
+  const v = solve(PITCHES.length, BEATS, rowClues, colClues);
+  console.log(puzzle.id, v.solved ? "✓ uniquely solvable" : "⚠ not line-solvable (ok for large puzzles)");
+
+  // Reset state
+  grid = Array.from({ length: PITCHES.length }, () => Array(BEATS).fill("empty"));
+
+  // Update subtitle
+  subtitle.textContent = puzzle.title;
+  hint.textContent = "Click: fill · Again: mark X · Again: clear";
+
+  // Update nav active state
+  nav.querySelectorAll(".nav-btn").forEach((btn, i) => {
+    btn.classList.toggle("active", ALL_PUZZLES[i].id === puzzle.id);
+  });
+
+  // Size cells based on grid size
+  const isLarge = BEATS > 10 || PITCHES.length > 8;
+  const cellSize = isLarge ? 32 : 44;
+  document.documentElement.style.setProperty("--cell-size", cellSize + "px");
+
+  // Render
+  renderGrid();
+}
+
+function renderGrid() {
+  const PITCHES = currentPuzzle.pitches;
+  const BEATS = currentPuzzle.solution[0].length;
+
+  puzzleTable.innerHTML = "";
+  cells = [];
+
+  const maxColClueLen = Math.max(...colClues.map((c) => c.length || 1));
+
+  // Column clues
+  const colClueRow = document.createElement("div");
+  colClueRow.className = "col-clue-row";
+  const corner = document.createElement("div");
+  corner.className = "corner";
+  colClueRow.appendChild(corner);
+
+  for (let col = 0; col < BEATS; col++) {
+    const clueCell = document.createElement("div");
+    clueCell.className = "col-clue";
+    const clue = colClues[col];
+    const padding = maxColClueLen - (clue.length || 1);
+    let html = "";
+    for (let i = 0; i < padding; i++) html += '<span class="clue-pad">&nbsp;</span>';
+    if (clue.length === 0) {
+      html += '<span class="clue-zero">0</span>';
+    } else {
+      html += clue.map((n) => `<span>${n}</span>`).join("");
+    }
+    clueCell.innerHTML = html;
+    colClueRow.appendChild(clueCell);
+  }
+
+  const cornerRight = document.createElement("div");
+  cornerRight.className = "corner-right";
+  colClueRow.appendChild(cornerRight);
+  puzzleTable.appendChild(colClueRow);
+
+  // Grid rows
+  for (let row = 0; row < PITCHES.length; row++) {
+    cells[row] = [];
+    const rowEl = document.createElement("div");
+    rowEl.className = "puzzle-row";
+
+    const rowClueEl = document.createElement("div");
+    rowClueEl.className = "row-clue";
+    const clue = rowClues[row];
+    rowClueEl.textContent = clue.length === 0 ? "0" : clue.join(" ");
+    rowEl.appendChild(rowClueEl);
+
+    for (let col = 0; col < BEATS; col++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      if (col % 2 === 0) cell.classList.add("even-beat");
+
+      const r = row, c = col; // capture for closure
+      cell.addEventListener("click", async () => {
+        if (isPlaying || isSolved) return;
+        await ensureAudio(currentPuzzle.bpm);
+        const note = PITCHES[r];
+
+        if (grid[r][c] === "empty") {
+          grid[r][c] = "filled";
+          cell.classList.add("filled");
+          cell.classList.remove("marked");
+          cell.textContent = "";
+          cell.style.backgroundColor = getNoteColor(note);
+          cell.style.boxShadow = `0 0 12px ${getNoteColor(note)}66`;
+          if (isSamplerReady()) playNote(note);
+        } else if (grid[r][c] === "filled") {
+          grid[r][c] = "marked";
+          cell.classList.remove("filled");
+          cell.classList.add("marked");
+          cell.style.backgroundColor = "";
+          cell.style.boxShadow = "";
+          cell.textContent = "X";
+        } else {
+          grid[r][c] = "empty";
+          cell.classList.remove("filled", "marked");
+          cell.style.backgroundColor = "";
+          cell.style.boxShadow = "";
+          cell.textContent = "";
+        }
+
+        if (!isSolved && checkSolved()) {
+          isSolved = true;
+          subtitle.textContent = currentPuzzle.revealTitle;
+          hint.textContent = "Solved!";
+          await playMelody();
+        }
+      });
+
+      rowEl.appendChild(cell);
+      cells[row][col] = cell;
+    }
+
+    const pitchLabel = document.createElement("div");
+    pitchLabel.className = "pitch-label";
+    pitchLabel.textContent = PITCHES[row];
+    rowEl.appendChild(pitchLabel);
+
+    puzzleTable.appendChild(rowEl);
+  }
+}
+
+// --- Check win ---
+function checkSolved(): boolean {
+  const sol = currentPuzzle.solution;
+  for (let r = 0; r < sol.length; r++) {
+    for (let c = 0; c < sol[0].length; c++) {
+      if ((grid[r][c] === "filled") !== sol[r][c]) return false;
+    }
+  }
+  return true;
+}
+
 // --- Duration-aware playback ---
 async function playMelody(): Promise<void> {
   if (isPlaying) return;
-  await ensureAudio();
+  await ensureAudio(currentPuzzle.bpm);
+  if (!isSamplerReady()) return;
+
   isPlaying = true;
   playBtn.disabled = true;
   clearBtn.disabled = true;
 
-  const secPerBeat = 60 / BPM;
+  const PITCHES = currentPuzzle.pitches;
+  const BEATS = currentPuzzle.solution[0].length;
+  const secPerBeat = 60 / currentPuzzle.bpm;
 
-  Tone.getTransport().stop();
-  Tone.getTransport().cancel();
-  Tone.getTransport().position = 0;
+  const transport = getTransport();
+  transport.stop();
+  transport.cancel();
+  transport.position = 0;
 
   // Schedule sustained notes
   for (let r = 0; r < PITCHES.length; r++) {
@@ -245,12 +271,7 @@ async function playMelody(): Promise<void> {
       if (grid[r][c] === "filled") {
         let len = 1;
         while (c + len < BEATS && grid[r][c + len] === "filled") len++;
-        const note = PITCHES[r];
-        const startTime = c * secPerBeat;
-        const duration = len * secPerBeat * 0.9;
-        Tone.getTransport().schedule((time) => {
-          getSynth().triggerAttackRelease(note, duration, time);
-        }, startTime);
+        scheduleNote(PITCHES[r], c * secPerBeat, len * secPerBeat * 0.9);
         c += len;
       } else {
         c++;
@@ -258,15 +279,16 @@ async function playMelody(): Promise<void> {
     }
   }
 
-  Tone.getTransport().start();
+  transport.start();
 
+  // Animate column by column
   for (let col = 0; col < BEATS; col++) {
     for (let row = 0; row < PITCHES.length; row++) {
       const cell = cells[row][col];
       cell.classList.add("active-col");
       if (grid[row][col] === "filled") {
         cell.classList.add("playing");
-        cell.style.boxShadow = `0 0 30px ${getNoteColor(PITCHES[row])}, 0 0 60px ${getNoteColor(PITCHES[row])}44`;
+        cell.style.boxShadow = `0 0 25px ${getNoteColor(PITCHES[row])}, 0 0 50px ${getNoteColor(PITCHES[row])}44`;
       }
     }
 
@@ -276,13 +298,13 @@ async function playMelody(): Promise<void> {
       const cell = cells[row][col];
       cell.classList.remove("active-col", "playing");
       if (grid[row][col] === "filled") {
-        cell.style.boxShadow = `0 0 15px ${getNoteColor(PITCHES[row])}66`;
+        cell.style.boxShadow = `0 0 12px ${getNoteColor(PITCHES[row])}66`;
       }
     }
   }
 
-  Tone.getTransport().stop();
-  Tone.getTransport().cancel();
+  transport.stop();
+  transport.cancel();
   isPlaying = false;
   playBtn.disabled = false;
   clearBtn.disabled = false;
@@ -293,8 +315,10 @@ playBtn.addEventListener("click", () => playMelody());
 clearBtn.addEventListener("click", () => {
   if (isPlaying) return;
   isSolved = false;
-  subtitle.textContent = "Can you hear it?";
+  subtitle.textContent = currentPuzzle.title;
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
+  const PITCHES = currentPuzzle.pitches;
+  const BEATS = currentPuzzle.solution[0].length;
   for (let r = 0; r < PITCHES.length; r++) {
     for (let c = 0; c < BEATS; c++) {
       grid[r][c] = "empty";
@@ -310,3 +334,8 @@ clearBtn.addEventListener("click", () => {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// --- Init: load first puzzle from hash or default ---
+const hashId = location.hash.replace("#", "");
+const initial = ALL_PUZZLES.find((p) => p.id === hashId) || ALL_PUZZLES[0];
+loadPuzzle(initial);
