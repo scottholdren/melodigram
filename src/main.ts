@@ -102,6 +102,7 @@ gameContainer.appendChild(controls);
 
 const playBtn = document.createElement("button");
 playBtn.textContent = "Play melody";
+playBtn.disabled = true;
 controls.appendChild(playBtn);
 
 const autoBtn = document.createElement("button");
@@ -187,6 +188,7 @@ function loadPuzzle(puzzle: Puzzle) {
   subtitle.textContent = "Fill in the grid using the clues";
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
   location.hash = puzzle.id;
+  playBtn.disabled = true;
 
   // Pre-load samples for all instruments used by this puzzle
   loadPuzzleSamples(puzzle);
@@ -283,6 +285,7 @@ function renderGrid() {
           isSolved = true;
           subtitle.textContent = `${currentPuzzle.title}${currentPuzzle.composer ? " — " + currentPuzzle.composer : ""}`;
           hint.textContent = "Solved!";
+          playBtn.disabled = false;
           revealCells();
           await playMelody();
         }
@@ -393,7 +396,7 @@ async function playMelody(): Promise<void> {
   transport.stop();
   transport.cancel();
   isPlaying = false;
-  playBtn.disabled = false;
+  playBtn.disabled = !isSolved;
   clearBtn.disabled = false;
 }
 
@@ -547,6 +550,7 @@ async function autoSolve() {
     isSolved = true;
     subtitle.textContent = `${currentPuzzle.title}${currentPuzzle.composer ? " — " + currentPuzzle.composer : ""}`;
     hint.textContent = "Solved!";
+    playBtn.disabled = false;
     revealCells();
     await playMelody();
   }
@@ -556,9 +560,15 @@ autoBtn.addEventListener("click", () => autoSolve());
 
 clearBtn.addEventListener("click", () => {
   if (isPlaying || !currentPuzzle) return;
+  // Only ask for confirmation if there's actually something to lose
+  const hasWork = grid.some((row) => row.some((c) => c !== "empty"));
+  if (hasWork && !confirm("Clear the grid? Your progress on this puzzle will be lost.")) {
+    return;
+  }
   autoSolving = false;
   autoBtn.textContent = "Auto-solve";
   isSolved = false;
+  playBtn.disabled = true;
   subtitle.textContent = "Fill in the grid using the clues";
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
   const ROWS = currentPuzzle.rows;

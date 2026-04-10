@@ -190,7 +190,8 @@ h1 {
 .puzzle-table {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 2px; /* vertical spacing between rows, matches horizontal cell gap */
+  padding: 8px; /* breathing room so playing-cell scale doesn't overflow */
   overflow-x: auto;
   max-width: 100%;
 }

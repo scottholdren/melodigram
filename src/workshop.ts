@@ -780,9 +780,12 @@ function applyImport(result: ImportResult) {
 
   const secPerStep = 60 / bpm / quantizeDivisor(quantize);
 
-  // Auto-set steps from content
+  // Auto-trim: shift so the first note starts at time 0, size the grid
+  // to fit from first to last note.
+  const minTime = Math.min(...result.notes.map((n) => n.time));
   const maxTime = Math.max(...result.notes.map((n) => n.time + n.duration));
-  const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
+  const contentSpan = maxTime - minTime;
+  const neededSteps = Math.ceil(contentSpan / secPerStep) + 1;
   steps = Math.max(16, Math.min(128, neededSteps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
 
@@ -853,7 +856,7 @@ function applyImport(result: ImportResult) {
         for (const note of t.notes) {
           const rowIdx = rowIndexByTrackMidi.get(`${t.index}:${note.midi}`);
           if (rowIdx === undefined) continue;
-          const startStep = Math.round(note.time / secPerStep);
+          const startStep = Math.round((note.time - minTime) / secPerStep);
           const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
           for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
             if (s >= 0) {
@@ -894,11 +897,13 @@ function applyImport(result: ImportResult) {
       const rowIndex = ALL_PITCHES.indexOf(pitchName);
       if (rowIndex < 0) continue;
 
-      const startStep = Math.round(note.time / secPerStep);
+      const startStep = Math.round((note.time - minTime) / secPerStep);
       const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
       for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
-        grid[rowIndex][s] = true;
-        placed++;
+        if (s >= 0) {
+          grid[rowIndex][s] = true;
+          placed++;
+        }
       }
       if (startStep >= 0 && startStep < steps) {
         attacks[rowIndex][startStep] = true;

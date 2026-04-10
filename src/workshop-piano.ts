@@ -437,9 +437,12 @@ function applyImport(result: ImportResult) {
 
   const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
 
-  // Auto-set steps from content
+  // Auto-trim: shift the song so the first note starts at time 0, and
+  // size the grid to fit exactly from first to last note.
+  const minTime = Math.min(...result.notes.map((n) => n.time));
   const maxTime = Math.max(...result.notes.map((n) => n.time + n.duration));
-  const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
+  const contentSpan = maxTime - minTime;
+  const neededSteps = Math.ceil(contentSpan / secPerStep) + 1;
   steps = Math.max(16, Math.min(128, neededSteps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
 
@@ -447,19 +450,21 @@ function applyImport(result: ImportResult) {
   displayPitches = [...ALL_PITCHES];
   grid = displayPitches.map(() => Array(steps).fill(false));
 
-  // Place notes
+  // Place notes (offset by minTime so the first note lands on step 0)
   let placed = 0;
   for (const note of result.notes) {
     const pitchName = midiToNote(note.midi);
     const rowIndex = ALL_PITCHES.indexOf(pitchName);
     if (rowIndex < 0) continue;
 
-    const startStep = Math.round(note.time / secPerStep);
+    const startStep = Math.round((note.time - minTime) / secPerStep);
     const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
 
     for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
-      grid[rowIndex][s] = true;
-      placed++;
+      if (s >= 0) {
+        grid[rowIndex][s] = true;
+        placed++;
+      }
     }
   }
 
