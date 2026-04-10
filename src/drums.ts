@@ -457,43 +457,39 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
 });
 
 // --- MIDI Import ---
-// General MIDI drum map: MIDI note number -> our sound name (best match)
-const GM_DRUM_MAP: Record<number, string> = {
-  35: "808 Kick",      // Acoustic Bass Drum
-  36: "808 Kick",      // Bass Drum 1
-  37: "808 Rim",       // Side Stick
-  38: "808 Snare",     // Acoustic Snare
-  39: "808 Clap",      // Hand Clap
-  40: "Break Snare",   // Electric Snare
-  41: "808 Lo Tom",    // Low Floor Tom
-  42: "808 Closed Hat", // Closed Hi-Hat
-  43: "808 Lo Tom",    // High Floor Tom
-  44: "808 Closed Hat", // Pedal Hi-Hat
-  45: "808 Hi Tom",    // Low Tom
-  46: "808 Open Hat",  // Open Hi-Hat
-  47: "808 Hi Tom",    // Low-Mid Tom
-  48: "808 Hi Tom",    // Hi-Mid Tom
-  49: "808 Crash",     // Crash Cymbal 1
-  50: "808 Hi Tom",    // High Tom
-  51: "BB Ride",       // Ride Cymbal 1
-  52: "808 Crash",     // Chinese Cymbal
-  53: "BB Ride",       // Ride Bell
-  54: "BB Tom",        // Tambourine
-  55: "808 Crash",     // Splash Cymbal
-  56: "808 Rim",       // Cowbell
-  57: "808 Crash",     // Crash Cymbal 2
-  59: "BB Ride",       // Ride Cymbal 2
-  // Fallbacks for less common percussion
-  60: "808 Hi Tom",    // Hi Bongo
-  61: "808 Lo Tom",    // Low Bongo
-  62: "808 Hi Tom",    // Mute Hi Conga
-  63: "808 Hi Tom",    // Open Hi Conga
-  64: "808 Lo Tom",    // Low Conga
+// GM drum names for display (MIDI note -> human-readable name)
+const GM_DRUM_NAMES: Record<number, string> = {
+  27: "High Q", 28: "Slap", 29: "Scratch Push", 30: "Scratch Pull",
+  31: "Sticks", 32: "Square Click", 33: "Metronome Click", 34: "Metronome Bell",
+  35: "Acoustic Bass Drum", 36: "Bass Drum 1", 37: "Side Stick", 38: "Acoustic Snare",
+  39: "Hand Clap", 40: "Electric Snare", 41: "Low Floor Tom", 42: "Closed Hi-Hat",
+  43: "High Floor Tom", 44: "Pedal Hi-Hat", 45: "Low Tom", 46: "Open Hi-Hat",
+  47: "Low-Mid Tom", 48: "Hi-Mid Tom", 49: "Crash Cymbal 1", 50: "High Tom",
+  51: "Ride Cymbal 1", 52: "Chinese Cymbal", 53: "Ride Bell", 54: "Tambourine",
+  55: "Splash Cymbal", 56: "Cowbell", 57: "Crash Cymbal 2", 58: "Vibraslap",
+  59: "Ride Cymbal 2", 60: "Hi Bongo", 61: "Low Bongo", 62: "Mute Hi Conga",
+  63: "Open Hi Conga", 64: "Low Conga", 65: "High Timbale", 66: "Low Timbale",
+  67: "High Agogo", 68: "Low Agogo", 69: "Cabasa", 70: "Maracas",
+  71: "Short Whistle", 72: "Long Whistle", 73: "Short Guiro", 74: "Long Guiro",
+  75: "Claves", 76: "Hi Wood Block", 77: "Low Wood Block", 78: "Mute Cuica",
+  79: "Open Cuica", 80: "Mute Triangle", 81: "Open Triangle",
 };
 
-function midiNoteToSoundName(midiNote: number): string {
-  return GM_DRUM_MAP[midiNote] || "808 Kick";
-}
+// Best-match mapping from GM drum type to our sounds
+const GM_SOUND_MAP: Record<number, string> = {
+  35: "808 Kick", 36: "808 Kick",
+  37: "808 Rim", 38: "808 Snare", 39: "808 Clap", 40: "Break Snare",
+  41: "808 Lo Tom", 42: "808 Closed Hat", 43: "808 Lo Tom", 44: "808 Closed Hat",
+  45: "808 Hi Tom", 46: "808 Open Hat", 47: "808 Lo Tom", 48: "808 Hi Tom",
+  49: "808 Crash", 50: "808 Hi Tom", 51: "BB Ride", 52: "808 Crash",
+  53: "BB Ride", 54: "808 Rim", 55: "808 Crash", 56: "808 Rim",
+  57: "808 Crash", 58: "808 Rim", 59: "BB Ride",
+  60: "808 Hi Tom", 61: "808 Lo Tom", 62: "808 Hi Tom", 63: "808 Hi Tom",
+  64: "808 Lo Tom", 65: "808 Hi Tom", 66: "808 Lo Tom",
+  67: "808 Rim", 68: "808 Rim", 69: "808 Closed Hat", 70: "808 Closed Hat",
+  75: "808 Rim", 76: "808 Rim", 77: "808 Rim",
+  80: "808 Open Hat", 81: "808 Open Hat",
+};
 
 function findSoundIndex(name: string): number {
   const idx = ALL_SOUNDS.findIndex((s) => s.name === name);
@@ -512,74 +508,77 @@ async function handleMidiFile(file: File) {
 }
 
 function importDrumMidi(midi: Midi) {
-  // Get BPM from MIDI
   if (midi.header.tempos.length > 0) {
     bpm = Math.round(midi.header.tempos[0].bpm);
     (document.getElementById("cfg-bpm") as HTMLInputElement).value = String(bpm);
   }
 
-  const secPerStep = (60 / bpm) / 4; // 16th note grid
+  const secPerStep = (60 / bpm) / 4;
 
-  // Collect all drum notes across all tracks
-  // Prefer channel 10 (GM drums) but accept any track with percussion-range notes
-  const drumNotes: { midi: number; time: number }[] = [];
-
+  // Collect ALL notes from ALL tracks
+  const allNotes: { midi: number; time: number; channel: number }[] = [];
   for (const track of midi.tracks) {
     for (const note of track.notes) {
-      // GM drums are on channel 9 (0-indexed), but many MIDI files
-      // put drums anywhere. Accept notes in the 35-64 range as drums.
-      if (note.midi >= 35 && note.midi <= 81) {
-        drumNotes.push({ midi: note.midi, time: note.time });
-      }
+      allNotes.push({ midi: note.midi, time: note.time, channel: note.midi });
     }
   }
 
-  if (drumNotes.length === 0) {
-    // No drum-range notes found, try treating ALL notes as drum hits
-    for (const track of midi.tracks) {
-      for (const note of track.notes) {
-        drumNotes.push({ midi: note.midi, time: note.time });
-      }
-    }
-  }
-
-  if (drumNotes.length === 0) {
-    statusEl.textContent = "No drum notes found in MIDI file";
+  if (allNotes.length === 0) {
+    statusEl.textContent = "No notes found in MIDI file";
     return;
   }
 
-  // Figure out which unique drum sounds are used
-  const usedSoundNames = [...new Set(drumNotes.map((n) => midiNoteToSoundName(n.midi)))];
+  // Group notes by MIDI note number — each unique note number becomes a track
+  const noteGroups = new Map<number, { midi: number; time: number }[]>();
+  for (const note of allNotes) {
+    if (!noteGroups.has(note.midi)) noteGroups.set(note.midi, []);
+    noteGroups.get(note.midi)!.push(note);
+  }
+
+  // Sort groups by MIDI note (low to high)
+  const sortedNotes = [...noteGroups.keys()].sort((a, b) => a - b);
 
   // Determine steps needed
-  const maxTime = Math.max(...drumNotes.map((n) => n.time));
+  const maxTime = Math.max(...allNotes.map((n) => n.time));
   const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
-  // Round up to nearest multiple of 4
   steps = Math.min(128, Math.max(4, Math.ceil(neededSteps / 4) * 4));
   (document.getElementById("cfg-steps") as HTMLSelectElement).value = String(steps);
 
-  // Set up tracks
-  trackSounds = usedSoundNames.map((name) => findSoundIndex(name));
+  // Create one track per unique MIDI note
+  trackSounds = sortedNotes.map((midiNote) => {
+    const soundName = GM_SOUND_MAP[midiNote];
+    return soundName ? findSoundIndex(soundName) : findSoundIndex("808 Kick");
+  });
   grid = trackSounds.map(() => Array(steps).fill(false));
 
   // Place notes
   let placed = 0;
-  for (const note of drumNotes) {
-    const soundName = midiNoteToSoundName(note.midi);
-    const trackIdx = usedSoundNames.indexOf(soundName);
-    if (trackIdx < 0) continue;
-
-    const step = Math.round(note.time / secPerStep);
-    if (step >= 0 && step < steps) {
-      grid[trackIdx][step] = true;
-      placed++;
+  sortedNotes.forEach((midiNote, trackIdx) => {
+    const notes = noteGroups.get(midiNote)!;
+    for (const note of notes) {
+      const step = Math.round(note.time / secPerStep);
+      if (step >= 0 && step < steps) {
+        grid[trackIdx][step] = true;
+        placed++;
+      }
     }
-  }
+  });
 
-  // Load new samples and render
+  // Build a readable summary of the mapping
+  const mapping = sortedNotes.map((midiNote, i) => {
+    const gmName = GM_DRUM_NAMES[midiNote] || `Note ${midiNote}`;
+    const assignedSound = ALL_SOUNDS[trackSounds[i]].name;
+    const hitCount = noteGroups.get(midiNote)!.length;
+    return `  MIDI ${midiNote} (${gmName}) → ${assignedSound} [${hitCount} hits]`;
+  });
+
   loadAllTrackSamples();
   renderSequencer();
-  statusEl.textContent = `Imported ${drumNotes.length} hits (${placed} placed) across ${usedSoundNames.length} sounds from ${midi.tracks.length} track(s)`;
+  statusEl.textContent = `Imported ${allNotes.length} hits across ${sortedNotes.length} tracks. Change sounds with the dropdowns.`;
+
+  // Show mapping in export area so user can see what happened
+  exportOutput.style.display = "block";
+  exportOutput.textContent = `MIDI Import Mapping:\n${mapping.join("\n")}\n\nChange any track's sound using the dropdown to the left of the grid.`;
 }
 
 // MIDI drag and drop
