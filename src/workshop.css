@@ -269,6 +269,118 @@ body {
   box-shadow: inset 0 0 0 1px #ffffff22;
 }
 
+/* --- Test Play Mode --- */
+.play-container {
+  border: 1px solid #22223a;
+  border-radius: 8px;
+  padding: 1rem;
+  background: #0a0a14;
+}
+
+.play-table {
+  display: inline-block;
+  min-width: fit-content;
+}
+
+.play-col-clue-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.play-corner {
+  width: 90px;
+  min-width: 90px;
+}
+
+.play-pitch-spacer {
+  width: 44px;
+  min-width: 44px;
+}
+
+.play-col-clue {
+  width: 36px;
+  min-width: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  padding-bottom: 4px;
+  font-size: 0.7rem;
+  font-family: monospace;
+  color: #aaa;
+}
+
+.play-col-clue span { display: block; line-height: 1.2; }
+.play-clue-pad { visibility: hidden; }
+.play-clue-pad::before { content: "0"; }
+.play-clue-zero { color: #444; }
+
+.play-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.play-row-clue {
+  width: 90px;
+  min-width: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #aaa;
+  white-space: nowrap;
+}
+
+.play-pitch-label {
+  width: 44px;
+  min-width: 44px;
+  padding-left: 8px;
+  font-size: 0.65rem;
+  font-family: monospace;
+  color: #555;
+}
+
+.play-cell {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  background: #14141e;
+  border: 1px solid #22223a;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: #555;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.play-cell.play-even { background: #18182a; }
+.play-cell:hover { border-color: #44446a; }
+.play-cell.play-filled { border-color: transparent; }
+.play-cell.play-marked { color: #666; font-weight: bold; }
+
+/* Given cells: muted gray, not clickable */
+.play-cell.play-given,
+.play-cell.play-given-filled {
+  background: #2e2e3e !important;
+  border-color: #3a3a4e !important;
+  cursor: default;
+}
+
+.play-cell.play-given-filled {
+  background: #404050 !important;
+  box-shadow: inset 0 0 6px #00000066;
+}
+
 /* Note colors */
 .note-C { background: #ff335566 !important; }
 .note-D { background: #ff883366 !important; }

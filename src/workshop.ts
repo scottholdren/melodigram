@@ -189,6 +189,12 @@ const rollContainer = document.createElement("div");
 rollContainer.className = "roll-container";
 app.appendChild(rollContainer);
 
+// Test play container (hidden by default)
+const playContainer = document.createElement("div");
+playContainer.className = "play-container";
+playContainer.style.display = "none";
+app.appendChild(playContainer);
+
 // Controls
 const controls = document.createElement("div");
 controls.className = "controls";
@@ -202,6 +208,7 @@ controls.innerHTML = `
   <button id="btn-del-last">Delete last bar</button>
   <button id="btn-check">Check solvability</button>
   <button id="btn-make-solvable" class="primary">Make solvable</button>
+  <button id="btn-test-play" class="primary">Test play</button>
   <button id="btn-export" class="primary">Export puzzle</button>
 </span>
 <div class="config-inline" id="difficulty-wrap" style="display:none">
@@ -757,8 +764,252 @@ document.getElementById("btn-make-solvable")!.addEventListener("click", async ()
   }
 
   exportOutput.textContent = report;
-  status.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange)`;
+  status.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange). Click "Test play" to try it.`;
 });
+
+// --- Test Play Mode ---
+// Renders the puzzle as a player would see it: cleared grid with clues,
+// given cells in muted gray, click to fill/mark/clear
+let testPlayMode = false;
+let testPlayGrid: ("empty" | "filled" | "marked")[][] = [];
+let testPlayCells: HTMLDivElement[][] = [];
+let testPlayPitches: string[] = [];
+let testPlaySolution: boolean[][] = [];
+let testPlayGivenSet: Set<string> = new Set();
+let testPlaySolved = false;
+
+function enterTestPlay() {
+  const usedRows: number[] = [];
+  for (let r = 0; r < displayPitches.length; r++) {
+    if (grid[r]?.some(Boolean)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    status.textContent = "Place some notes first!";
+    return;
+  }
+
+  testPlayPitches = usedRows.map((i) => displayPitches[i]);
+  testPlaySolution = usedRows.map((i) => grid[i].slice(0, steps));
+
+  // Build given set from lastGivens (which uses solution-space row indices)
+  testPlayGivenSet = new Set();
+  for (const [r, c] of lastGivens) {
+    testPlayGivenSet.add(`${r},${c}`);
+  }
+
+  // Start with empty grid, but givens are "filled"
+  testPlayGrid = testPlaySolution.map((row, r) =>
+    row.map((_, c) => testPlayGivenSet.has(`${r},${c}`) ? "filled" : "empty")
+  );
+
+  testPlaySolved = false;
+  testPlayMode = true;
+  rollContainer.style.display = "none";
+  playContainer.style.display = "block";
+  renderTestPlay();
+  status.textContent = "Test play mode — click cells to solve. Given cells are gray.";
+}
+
+function exitTestPlay() {
+  testPlayMode = false;
+  playContainer.style.display = "none";
+  rollContainer.style.display = "";
+  status.textContent = "";
+}
+
+function renderTestPlay() {
+  playContainer.innerHTML = "";
+  testPlayCells = [];
+
+  const rows = testPlayPitches.length;
+  const cols = steps;
+
+  // Compute clues from solution
+  const rowClues = testPlaySolution.map((row) => computeClues(row));
+  const colClues: number[][] = [];
+  for (let c = 0; c < cols; c++) {
+    colClues.push(computeClues(testPlaySolution.map((row) => row[c])));
+  }
+
+  const maxColClueLen = Math.max(...colClues.map((c) => c.length || 1));
+
+  // Back button
+  const backBtn = document.createElement("button");
+  backBtn.textContent = "← Back to edit";
+  backBtn.style.marginBottom = "0.5rem";
+  backBtn.addEventListener("click", exitTestPlay);
+  playContainer.appendChild(backBtn);
+
+  const table = document.createElement("div");
+  table.className = "play-table";
+  playContainer.appendChild(table);
+
+  // Column clue row
+  const colClueRow = document.createElement("div");
+  colClueRow.className = "play-col-clue-row";
+  const corner = document.createElement("div");
+  corner.className = "play-corner";
+  colClueRow.appendChild(corner);
+
+  for (let c = 0; c < cols; c++) {
+    const clueCell = document.createElement("div");
+    clueCell.className = "play-col-clue";
+    const clue = colClues[c];
+    const padding = maxColClueLen - (clue.length || 1);
+    let html = "";
+    for (let i = 0; i < padding; i++) html += '<span class="play-clue-pad">&nbsp;</span>';
+    if (clue.length === 0) html += '<span class="play-clue-zero">0</span>';
+    else html += clue.map((n) => `<span>${n}</span>`).join("");
+    clueCell.innerHTML = html;
+    colClueRow.appendChild(clueCell);
+  }
+
+  const pitchSpacer = document.createElement("div");
+  pitchSpacer.className = "play-pitch-spacer";
+  colClueRow.appendChild(pitchSpacer);
+  table.appendChild(colClueRow);
+
+  // Rows
+  for (let r = 0; r < rows; r++) {
+    testPlayCells[r] = [];
+    const rowEl = document.createElement("div");
+    rowEl.className = "play-row";
+
+    const rowClueEl = document.createElement("div");
+    rowClueEl.className = "play-row-clue";
+    const clue = rowClues[r];
+    rowClueEl.textContent = clue.length === 0 ? "0" : clue.join(" ");
+    rowEl.appendChild(rowClueEl);
+
+    for (let c = 0; c < cols; c++) {
+      const cell = document.createElement("div");
+      cell.className = "play-cell";
+      if (c % 2 === 0) cell.classList.add("play-even");
+
+      const isGiven = testPlayGivenSet.has(`${r},${c}`);
+      if (isGiven) {
+        cell.classList.add("play-given");
+      }
+
+      if (testPlayGrid[r][c] === "filled") {
+        cell.classList.add(isGiven ? "play-given-filled" : "play-filled");
+        if (!isGiven) {
+          const note = testPlayPitches[r];
+          cell.style.backgroundColor = getNoteColorFor(note);
+          cell.style.boxShadow = `0 0 12px ${getNoteColorFor(note)}66`;
+        }
+      } else if (testPlayGrid[r][c] === "marked") {
+        cell.textContent = "X";
+        cell.classList.add("play-marked");
+      }
+
+      const ri = r, ci = c;
+      cell.addEventListener("click", async () => {
+        if (testPlaySolved) return;
+        if (testPlayGivenSet.has(`${ri},${ci}`)) return; // can't modify givens
+        await ensureAudio(bpm);
+        const note = testPlayPitches[ri];
+        const state = testPlayGrid[ri][ci];
+
+        if (state === "empty") {
+          testPlayGrid[ri][ci] = "filled";
+          cell.classList.add("play-filled");
+          cell.classList.remove("play-marked");
+          cell.textContent = "";
+          cell.style.backgroundColor = getNoteColorFor(note);
+          cell.style.boxShadow = `0 0 12px ${getNoteColorFor(note)}66`;
+          triggerNote(note);
+        } else if (state === "filled") {
+          testPlayGrid[ri][ci] = "marked";
+          cell.classList.remove("play-filled");
+          cell.classList.add("play-marked");
+          cell.style.backgroundColor = "";
+          cell.style.boxShadow = "";
+          cell.textContent = "X";
+        } else {
+          testPlayGrid[ri][ci] = "empty";
+          cell.classList.remove("play-filled", "play-marked");
+          cell.style.backgroundColor = "";
+          cell.style.boxShadow = "";
+          cell.textContent = "";
+        }
+
+        // Check win
+        if (checkTestPlaySolved()) {
+          testPlaySolved = true;
+          status.textContent = "Solved! 🎵";
+          playTestPlayMelody();
+        }
+      });
+
+      rowEl.appendChild(cell);
+      testPlayCells[r][c] = cell;
+    }
+
+    // Pitch label on right
+    const pitchLabel = document.createElement("div");
+    pitchLabel.className = "play-pitch-label";
+    pitchLabel.textContent = testPlayPitches[r];
+    rowEl.appendChild(pitchLabel);
+
+    table.appendChild(rowEl);
+  }
+}
+
+function getNoteColorFor(note: string): string {
+  const letter = note.replace(/[0-9#]/g, "");
+  const colors: Record<string, string> = {
+    C: "#ff3355", D: "#ff8833", E: "#ffdd33", F: "#33dd77",
+    G: "#33ccff", A: "#5566ff", B: "#aa44ff",
+  };
+  return colors[letter] || "#888";
+}
+
+function checkTestPlaySolved(): boolean {
+  for (let r = 0; r < testPlaySolution.length; r++) {
+    for (let c = 0; c < testPlaySolution[0].length; c++) {
+      const isFilled = testPlayGrid[r][c] === "filled";
+      if (isFilled !== testPlaySolution[r][c]) return false;
+    }
+  }
+  return true;
+}
+
+async function playTestPlayMelody() {
+  await ensureAudio(bpm);
+  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
+  const transport = Tone.getTransport();
+  transport.stop();
+  transport.cancel();
+  transport.position = 0;
+
+  for (let r = 0; r < testPlayPitches.length; r++) {
+    let c = 0;
+    while (c < steps) {
+      if (testPlaySolution[r][c]) {
+        let len = 1;
+        while (c + len < steps && testPlaySolution[r][c + len]) len++;
+        const note = testPlayPitches[r];
+        const startTime = c * secPerStep;
+        const dur = len * secPerStep * 0.85;
+        if (usePiano) {
+          import("./audio").then((mod) => mod.scheduleNote(note, startTime, dur));
+        } else if (synthInstance) {
+          const synth = synthInstance;
+          transport.schedule((t) => synth.triggerAttackRelease(note, dur, t), startTime);
+        }
+        c += len;
+      } else {
+        c++;
+      }
+    }
+  }
+
+  transport.start();
+  setTimeout(() => { transport.stop(); transport.cancel(); }, steps * secPerStep * 1000 + 500);
+}
+
+document.getElementById("btn-test-play")!.addEventListener("click", enterTestPlay);
 
 // --- Export ---
 function computeClues(line: boolean[]): number[] {
