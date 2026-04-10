@@ -1,6 +1,7 @@
 import * as Tone from "tone";
 import { loadPiano, ensureAudio, isSamplerReady } from "./audio";
 import { importFile, type ImportResult } from "./importers";
+import { checkSolvability } from "./solver";
 
 // --- Constants ---
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -196,6 +197,7 @@ controls.innerHTML = `
   <button id="btn-stop">&#9632; Stop</button>
   <button id="btn-clear">Clear</button>
   <button id="btn-trim">Trim empty</button>
+  <button id="btn-check">Check solvability</button>
   <button id="btn-export" class="primary">Export puzzle</button>
 `;
 app.appendChild(controls);
@@ -611,6 +613,29 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
     });
   }
   status.textContent = `${usedIndices.length} rows with notes (scrolled to active area). Use Export to get trimmed output.`;
+});
+
+// --- Check solvability ---
+document.getElementById("btn-check")!.addEventListener("click", () => {
+  // Find rows with notes
+  const usedRows: number[] = [];
+  for (let r = 0; r < ALL_PITCHES.length; r++) {
+    if (grid[r]?.some(Boolean)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    status.textContent = "Place some notes first!";
+    return;
+  }
+
+  const solution = usedRows.map((i) => grid[i].slice(0, steps));
+  const rowLabels = usedRows.map((i) => ALL_PITCHES[i]);
+  const colLabels = Array.from({ length: steps }, (_, i) => `Step ${i + 1}`);
+
+  const { report } = checkSolvability(solution, rowLabels, colLabels);
+
+  exportOutput.style.display = "block";
+  exportOutput.textContent = report;
+  status.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
 });
 
 // --- Export ---

@@ -1,6 +1,7 @@
 import * as Tone from "tone";
 import { Midi } from "@tonejs/midi";
 import { ALL_SOUNDS } from "./drum-sounds";
+import { checkSolvability } from "./solver";
 
 // Default track assignments (mix of both kits)
 const DEFAULT_SOUNDS = [
@@ -83,6 +84,7 @@ controls.innerHTML = `
   <button id="btn-stop">&#9632; Stop</button>
   <button id="btn-clear">Clear</button>
   <button id="btn-trim">Trim empty</button>
+  <button id="btn-check">Check solvability</button>
   <button id="btn-export" class="primary">Export</button>
 `;
 app.appendChild(controls);
@@ -407,6 +409,29 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
   grid = keep.map((i) => grid[i]);
   renderSequencer();
   statusEl.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""}`;
+});
+
+// --- Check solvability ---
+document.getElementById("btn-check")!.addEventListener("click", () => {
+  // Get only rows with hits
+  const usedRows: number[] = [];
+  for (let r = 0; r < grid.length; r++) {
+    if (grid[r]?.some(Boolean)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    statusEl.textContent = "Place some hits first!";
+    return;
+  }
+
+  const solution = usedRows.map((i) => grid[i].slice(0, steps));
+  const rowLabels = usedRows.map((i) => ALL_SOUNDS[trackSounds[i]].name);
+  const colLabels = Array.from({ length: steps }, (_, i) => `Beat ${i + 1}`);
+
+  const { report } = checkSolvability(solution, rowLabels, colLabels);
+
+  exportOutput.style.display = "block";
+  exportOutput.textContent = report;
+  statusEl.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
 });
 
 // --- Export ---
