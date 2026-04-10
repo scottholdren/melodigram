@@ -368,17 +368,11 @@ body {
 .play-cell.play-filled { border-color: transparent; }
 .play-cell.play-marked { color: #666; font-weight: bold; }
 
-/* Given cells: muted gray, not clickable */
-.play-cell.play-given,
-.play-cell.play-given-filled {
-  background: #2e2e3e !important;
-  border-color: #3a3a4e !important;
-  cursor: default;
-}
-
-.play-cell.play-given-filled {
-  background: #404050 !important;
+/* Extra cell marker in the workshop piano roll */
+.roll-cell.extra-cell {
+  background: #3a3a4a !important;
   box-shadow: inset 0 0 6px #00000066;
+  border-color: #555 !important;
 }
 
 /* Note colors */

@@ -706,8 +706,24 @@ document.getElementById("cfg-difficulty")!.addEventListener("input", (e) => {
 });
 
 // --- Make solvable ---
-let lastGivens: [number, number][] = [];
-let lastGivenUsedRows: number[] = [];
+// Extras are non-music filled cells added to the puzzle pattern for solvability.
+// They show up in the clues but don't play sound. Stored as a set of "r,c" keys
+// in the space of used-rows (i.e. the compacted solution grid).
+let extrasSet: Set<string> = new Set();
+let extrasUsedRows: number[] = [];
+
+function clearExtras() {
+  extrasSet = new Set();
+  extrasUsedRows = [];
+  // Remove visual markers from workshop cells
+  for (let r = 0; r < seqCells.length; r++) {
+    for (let c = 0; c < (seqCells[r]?.length || 0); c++) {
+      const cell = seqCells[r]?.[c];
+      if (!cell) continue;
+      cell.classList.remove("extra-cell");
+    }
+  }
+}
 
 document.getElementById("btn-make-solvable")!.addEventListener("click", async () => {
   const usedRows: number[] = [];
@@ -719,63 +735,68 @@ document.getElementById("btn-make-solvable")!.addEventListener("click", async ()
     return;
   }
 
-  const solution = usedRows.map((i) => grid[i].slice(0, steps));
-  const difficulty = parseInt((document.getElementById("cfg-difficulty") as HTMLInputElement).value) / 100;
+  const musicGrid = usedRows.map((i) => grid[i].slice(0, steps));
 
   exportOutput.style.display = "block";
-  exportOutput.textContent = "Finding minimum givens...";
-  status.textContent = "Making puzzle solvable...";
+  exportOutput.textContent = "Finding extras to make it solvable...";
+  status.textContent = "Adding extras to make puzzle solvable...";
 
-  const { givens, iterations } = await makePlayable(solution, difficulty, (msg) => {
+  // Reset any previous extras
+  clearExtras();
+
+  const { extras, iterations } = await makePlayable(musicGrid, 0.5, (msg) => {
     exportOutput.textContent = msg;
   });
 
-  lastGivens = givens;
-  lastGivenUsedRows = usedRows;
+  extrasUsedRows = usedRows;
+  extrasSet = new Set(extras.map(([r, c]) => `${r},${c}`));
 
-  const totalCells = solution.flat().length;
-  const filledCells = solution.flat().filter(Boolean).length;
-  const givenPct = Math.round((givens.length / filledCells) * 100);
+  const musicCount = musicGrid.flat().filter(Boolean).length;
 
-  let report = `SOLVABLE with ${givens.length} given cells (${givenPct}% of ${filledCells} notes revealed).\n`;
-  report += `Difficulty: ${difficulty < 0.3 ? "Easy" : difficulty < 0.7 ? "Medium" : "Hard"}\n`;
-  report += `Found in ${iterations} rounds.\n\n`;
-  report += `Given cells (row, col):\n`;
+  let report = `SOLVABLE with ${extras.length} extras added.\n`;
+  report += `(${musicCount} music cells + ${extras.length} silent extras = ${musicCount + extras.length} filled cells total)\n`;
+  report += `Found in ${iterations} iterations.\n\n`;
 
-  // Show givens grouped by row
-  const byRow = new Map<number, number[]>();
-  for (const [r, c] of givens) {
-    if (!byRow.has(r)) byRow.set(r, []);
-    byRow.get(r)!.push(c);
+  if (extras.length === 0) {
+    report += `The music alone is already uniquely line-solvable — no extras needed.\n`;
+  } else {
+    report += `Extras added (gray cells — silent, for puzzle structure):\n`;
+    const byRow = new Map<number, number[]>();
+    for (const [r, c] of extras) {
+      if (!byRow.has(r)) byRow.set(r, []);
+      byRow.get(r)!.push(c);
+    }
+    for (const [r, cs] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
+      const label = displayPitches[usedRows[r]] || `Row ${r}`;
+      report += `  ${label}: steps ${cs.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
+    }
   }
-  for (const [r, cols] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
-    const label = displayPitches[usedRows[r]] || `Row ${r}`;
-    report += `  ${label}: steps ${cols.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
-  }
 
-  // Highlight givens on the grid
-  for (const [solR, solC] of givens) {
+  // Mark extra cells visually in the workshop roll
+  for (const [solR, solC] of extras) {
     const gridR = usedRows[solR];
     if (seqCells[gridR]?.[solC]) {
-      const cell = seqCells[gridR][solC];
-      cell.style.outline = "2px solid #ffaa00";
-      cell.style.outlineOffset = "-2px";
+      seqCells[gridR][solC].classList.add("extra-cell");
     }
   }
 
   exportOutput.textContent = report;
-  status.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange). Click "Test play" to try it.`;
+  status.textContent = extras.length === 0
+    ? "Already solvable — no extras needed."
+    : `Solvable! Added ${extras.length} extras (gray). Click "Test play" to try it.`;
 });
 
 // --- Test Play Mode ---
-// Renders the puzzle as a player would see it: cleared grid with clues,
-// given cells in muted gray, click to fill/mark/clear
+// Renders the puzzle as a player would see it: cleared grid with clues
+// for the combined (music + extras) pattern. Player fills in to solve.
+// When solved, music cells glow in color, extras stay gray.
 let testPlayMode = false;
 let testPlayGrid: ("empty" | "filled" | "marked")[][] = [];
 let testPlayCells: HTMLDivElement[][] = [];
 let testPlayPitches: string[] = [];
-let testPlaySolution: boolean[][] = [];
-let testPlayGivenSet: Set<string> = new Set();
+let testPlayMusic: boolean[][] = []; // music cells only
+let testPlayCombined: boolean[][] = []; // music + extras (the puzzle solution)
+let testPlayExtrasSet: Set<string> = new Set(); // which cells are extras
 let testPlaySolved = false;
 
 function enterTestPlay() {
@@ -789,25 +810,34 @@ function enterTestPlay() {
   }
 
   testPlayPitches = usedRows.map((i) => displayPitches[i]);
-  testPlaySolution = usedRows.map((i) => grid[i].slice(0, steps));
+  testPlayMusic = usedRows.map((i) => grid[i].slice(0, steps));
 
-  // Build given set from lastGivens (which uses solution-space row indices)
-  testPlayGivenSet = new Set();
-  for (const [r, c] of lastGivens) {
-    testPlayGivenSet.add(`${r},${c}`);
+  // Apply extras if they match the current used rows
+  const extrasMatch = extrasUsedRows.length === usedRows.length &&
+    extrasUsedRows.every((r, i) => r === usedRows[i]);
+
+  testPlayExtrasSet = new Set();
+  if (extrasMatch) {
+    for (const key of extrasSet) testPlayExtrasSet.add(key);
   }
 
-  // Start with empty grid, but givens are "filled"
-  testPlayGrid = testPlaySolution.map((row, r) =>
-    row.map((_, c) => testPlayGivenSet.has(`${r},${c}`) ? "filled" : "empty")
+  // Combined pattern = music OR extras
+  testPlayCombined = testPlayMusic.map((row, r) =>
+    row.map((isMusic, c) => isMusic || testPlayExtrasSet.has(`${r},${c}`))
   );
+
+  // Start with empty grid (nothing pre-filled)
+  testPlayGrid = testPlayCombined.map((row) => row.map(() => "empty"));
 
   testPlaySolved = false;
   testPlayMode = true;
   rollContainer.style.display = "none";
   playContainer.style.display = "block";
   renderTestPlay();
-  status.textContent = "Test play mode — click cells to solve. Given cells are gray.";
+  const extrasCount = testPlayExtrasSet.size;
+  status.textContent = extrasCount > 0
+    ? `Test play — ${testPlayCombined.flat().filter(Boolean).length} cells to fill (${extrasCount} are silent extras). Click cells to solve.`
+    : "Test play mode — click cells to solve.";
 }
 
 function exitTestPlay() {
@@ -824,11 +854,11 @@ function renderTestPlay() {
   const rows = testPlayPitches.length;
   const cols = steps;
 
-  // Compute clues from solution
-  const rowClues = testPlaySolution.map((row) => computeClues(row));
+  // Compute clues from combined pattern (music + extras)
+  const rowClues = testPlayCombined.map((row) => computeClues(row));
   const colClues: number[][] = [];
   for (let c = 0; c < cols; c++) {
-    colClues.push(computeClues(testPlaySolution.map((row) => row[c])));
+    colClues.push(computeClues(testPlayCombined.map((row) => row[c])));
   }
 
   const maxColClueLen = Math.max(...colClues.map((c) => c.length || 1));
@@ -886,39 +916,27 @@ function renderTestPlay() {
       cell.className = "play-cell";
       if (c % 2 === 0) cell.classList.add("play-even");
 
-      const isGiven = testPlayGivenSet.has(`${r},${c}`);
-      if (isGiven) {
-        cell.classList.add("play-given");
-      }
-
-      if (testPlayGrid[r][c] === "filled") {
-        cell.classList.add(isGiven ? "play-given-filled" : "play-filled");
-        if (!isGiven) {
-          const note = testPlayPitches[r];
-          cell.style.backgroundColor = getNoteColorFor(note);
-          cell.style.boxShadow = `0 0 12px ${getNoteColorFor(note)}66`;
-        }
-      } else if (testPlayGrid[r][c] === "marked") {
-        cell.textContent = "X";
-        cell.classList.add("play-marked");
-      }
-
       const ri = r, ci = c;
       cell.addEventListener("click", async () => {
         if (testPlaySolved) return;
-        if (testPlayGivenSet.has(`${ri},${ci}`)) return; // can't modify givens
         await ensureAudio(bpm);
         const note = testPlayPitches[ri];
         const state = testPlayGrid[ri][ci];
+        const isMusic = testPlayMusic[ri][ci];
+        const isExtra = testPlayExtrasSet.has(`${ri},${ci}`);
 
         if (state === "empty") {
           testPlayGrid[ri][ci] = "filled";
-          cell.classList.add("play-filled");
           cell.classList.remove("play-marked");
           cell.textContent = "";
-          cell.style.backgroundColor = getNoteColorFor(note);
-          cell.style.boxShadow = `0 0 12px ${getNoteColorFor(note)}66`;
-          triggerNote(note);
+          // Color based on whether it's a music cell or extra
+          // (player doesn't know initially — they see all as same until solved)
+          // For feedback, show a generic "filled" color
+          cell.classList.add("play-filled");
+          cell.style.backgroundColor = "#5566ff";
+          cell.style.boxShadow = "0 0 10px #5566ff66";
+          // Play the note — music cells sound, extras are silent
+          if (isMusic) triggerNote(note);
         } else if (state === "filled") {
           testPlayGrid[ri][ci] = "marked";
           cell.classList.remove("play-filled");
@@ -938,6 +956,8 @@ function renderTestPlay() {
         if (checkTestPlaySolved()) {
           testPlaySolved = true;
           status.textContent = "Solved! 🎵";
+          // Reveal: music cells bright, extras gray
+          revealSolution();
           playTestPlayMelody();
         }
       });
@@ -967,12 +987,32 @@ function getNoteColorFor(note: string): string {
 
 function checkTestPlaySolved(): boolean {
   for (let r = 0; r < testPlaySolution.length; r++) {
-    for (let c = 0; c < testPlaySolution[0].length; c++) {
+    for (let c = 0; c < testPlayCombined[0].length; c++) {
       const isFilled = testPlayGrid[r][c] === "filled";
-      if (isFilled !== testPlaySolution[r][c]) return false;
+      if (isFilled !== testPlayCombined[r][c]) return false;
     }
   }
   return true;
+}
+
+function revealSolution() {
+  // After solving, recolor cells: music cells bright, extras gray
+  for (let r = 0; r < testPlayCells.length; r++) {
+    for (let c = 0; c < (testPlayCells[r]?.length || 0); c++) {
+      const cell = testPlayCells[r][c];
+      if (!cell) continue;
+      if (!testPlayCombined[r][c]) continue;
+      if (testPlayMusic[r][c]) {
+        const note = testPlayPitches[r];
+        cell.style.backgroundColor = getNoteColorFor(note);
+        cell.style.boxShadow = `0 0 15px ${getNoteColorFor(note)}88`;
+      } else {
+        // Extra: muted gray
+        cell.style.backgroundColor = "#3a3a4a";
+        cell.style.boxShadow = "inset 0 0 6px #00000066";
+      }
+    }
+  }
 }
 
 async function playTestPlayMelody() {
@@ -983,12 +1023,13 @@ async function playTestPlayMelody() {
   transport.cancel();
   transport.position = 0;
 
+  // Only play music cells, not extras
   for (let r = 0; r < testPlayPitches.length; r++) {
     let c = 0;
     while (c < steps) {
-      if (testPlaySolution[r][c]) {
+      if (testPlayMusic[r][c]) {
         let len = 1;
-        while (c + len < steps && testPlaySolution[r][c + len]) len++;
+        while (c + len < steps && testPlayMusic[r][c + len]) len++;
         const note = testPlayPitches[r];
         const startTime = c * secPerStep;
         const dur = len * secPerStep * 0.85;

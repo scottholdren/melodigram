@@ -462,46 +462,56 @@ document.getElementById("btn-make-solvable")!.addEventListener("click", async ()
     return;
   }
 
-  const solution = usedRows.map((i) => grid[i].slice(0, steps));
-  const difficulty = parseInt((document.getElementById("cfg-difficulty") as HTMLInputElement).value) / 100;
+  const musicGrid = usedRows.map((i) => grid[i].slice(0, steps));
 
   exportOutput.style.display = "block";
-  exportOutput.textContent = "Finding minimum givens...";
-  statusEl.textContent = "Making puzzle solvable...";
+  exportOutput.textContent = "Finding extras to make it solvable...";
+  statusEl.textContent = "Adding extras to make puzzle solvable...";
 
-  const { givens, iterations } = await makePlayable(solution, difficulty, (msg) => {
+  // Clear previous extras visual markers
+  for (let r = 0; r < cellEls.length; r++) {
+    for (let c = 0; c < (cellEls[r]?.length || 0); c++) {
+      cellEls[r]?.[c]?.classList.remove("extra-cell");
+    }
+  }
+
+  const { extras, iterations } = await makePlayable(musicGrid, 0.5, (msg) => {
     exportOutput.textContent = msg;
   });
 
-  const filledCells = solution.flat().filter(Boolean).length;
-  const givenPct = Math.round((givens.length / filledCells) * 100);
+  const musicCount = musicGrid.flat().filter(Boolean).length;
 
-  let report = `SOLVABLE with ${givens.length} given cells (${givenPct}% of ${filledCells} hits revealed).\n`;
-  report += `Difficulty: ${difficulty < 0.3 ? "Easy" : difficulty < 0.7 ? "Medium" : "Hard"}\n`;
-  report += `Found in ${iterations} rounds.\n\n`;
+  let report = `SOLVABLE with ${extras.length} extras added.\n`;
+  report += `(${musicCount} music hits + ${extras.length} silent extras = ${musicCount + extras.length} cells total)\n`;
+  report += `Found in ${iterations} iterations.\n\n`;
 
-  const byRow = new Map<number, number[]>();
-  for (const [r, c] of givens) {
-    if (!byRow.has(r)) byRow.set(r, []);
-    byRow.get(r)!.push(c);
+  if (extras.length === 0) {
+    report += `Already solvable by line logic — no extras needed.\n`;
+  } else {
+    report += `Extras (gray cells, silent in playback):\n`;
+    const byRow = new Map<number, number[]>();
+    for (const [r, c] of extras) {
+      if (!byRow.has(r)) byRow.set(r, []);
+      byRow.get(r)!.push(c);
+    }
+    for (const [r, cs] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
+      const label = ALL_SOUNDS[trackSounds[usedRows[r]]].name;
+      report += `  ${label}: beats ${cs.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
+    }
   }
-  report += `Given cells:\n`;
-  for (const [r, cols] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
-    const label = ALL_SOUNDS[trackSounds[usedRows[r]]].name;
-    report += `  ${label}: beats ${cols.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
-  }
 
-  // Highlight givens
-  for (const [solR, solC] of givens) {
+  // Mark extras visually
+  for (const [solR, solC] of extras) {
     const gridR = usedRows[solR];
     if (cellEls[gridR]?.[solC]) {
-      cellEls[gridR][solC].style.outline = "2px solid #ffaa00";
-      cellEls[gridR][solC].style.outlineOffset = "-2px";
+      cellEls[gridR][solC].classList.add("extra-cell");
     }
   }
 
   exportOutput.textContent = report;
-  statusEl.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange)`;
+  statusEl.textContent = extras.length === 0
+    ? "Already solvable — no extras needed."
+    : `Solvable! Added ${extras.length} extras (shown in gray).`;
 });
 
 // --- Export ---

@@ -549,149 +549,175 @@ export async function checkSolvability(
 }
 
 /**
- * Make a puzzle playable by adding "given" cells until solvable.
+ * Make a puzzle playable by ADDING extra filled cells to the pattern
+ * until it's uniquely solvable. These extras become part of the nonogram
+ * (they show up in the row/col clues) but they don't play music —
+ * they're purely for puzzle solvability.
  *
- * Fast approach:
- * 1. Disambiguate duplicate clues upfront (no solver needed)
- * 2. Reveal notes in sparse lines (simple clues first)
- * 3. Run solver once to check
- * 4. If still stuck, batch-reveal 5% of remaining and retry
+ * Strategy: try adding random non-music cells, check if the resulting
+ * pattern is uniquely line-solvable. Keep trying until one works.
+ * Each attempt is cheap compared to guessing single cells.
  */
 export async function makePlayable(
-  solution: boolean[][],
-  difficulty: number, // 0..1
+  musicGrid: boolean[][],
+  difficulty: number, // 0..1 (currently unused; kept for API compat)
   onProgress?: ProgressCallback
-): Promise<{ givens: [number, number][]; iterations: number }> {
-  const rows = solution.length;
-  const cols = solution[0]?.length || 0;
-  const totalCells = rows * cols;
+): Promise<{ extras: [number, number][]; iterations: number }> {
+  const rows = musicGrid.length;
+  const cols = musicGrid[0]?.length || 0;
 
-  const rowClues = solution.map((row) => computeClues(row));
+  // First check: maybe the music alone is already solvable
+  onProgress?.("Checking if music alone is solvable...");
+  await yieldUI();
+  if (await isLineSolvable(musicGrid)) {
+    onProgress?.("Already solvable, no extras needed");
+    return { extras: [], iterations: 0 };
+  }
+
+  // List of all cells that could be extras (currently empty)
+  const emptyCells: [number, number][] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!musicGrid[r][c]) emptyCells.push([r, c]);
+    }
+  }
+
+  // Try adding random extras. Binary search on count:
+  // - Start with a small number and increase
+  // - For each count, try several random patterns
+  let bestExtras: [number, number][] | null = null;
+  let round = 0;
+  const maxExtrasCount = Math.min(emptyCells.length, rows * cols); // upper bound
+
+  // Phase 1: try small numbers of extras first, then grow
+  for (let targetExtras = 1; targetExtras <= maxExtrasCount && !bestExtras; ) {
+    const attemptsPerSize = Math.max(20, Math.floor(100 / Math.sqrt(targetExtras)));
+    for (let attempt = 0; attempt < attemptsPerSize; attempt++) {
+      round++;
+      if (round % 10 === 0) {
+        onProgress?.(`Trying ${targetExtras} extras (attempt ${attempt + 1}/${attemptsPerSize})...`);
+        await yieldUI();
+      }
+
+      // Shuffle empty cells, pick the first `targetExtras` as candidates
+      const shuffled = [...emptyCells];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      const candidate = shuffled.slice(0, targetExtras);
+
+      // Build combined grid
+      const combined = musicGrid.map((row) => [...row]);
+      for (const [r, c] of candidate) combined[r][c] = true;
+
+      if (await isLineSolvable(combined)) {
+        bestExtras = candidate;
+        break;
+      }
+    }
+
+    // Grow target size exponentially, then linearly
+    if (!bestExtras) {
+      targetExtras = Math.max(targetExtras + 1, Math.ceil(targetExtras * 1.5));
+    }
+  }
+
+  if (!bestExtras) {
+    onProgress?.("Could not find a solvable extras pattern");
+    return { extras: [], iterations: round };
+  }
+
+  // Phase 2: try to MINIMIZE — remove extras one at a time if still solvable
+  onProgress?.(`Found solution with ${bestExtras.length} extras. Minimizing...`);
+  await yieldUI();
+
+  let current = [...bestExtras];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < current.length; i++) {
+      round++;
+      if (round % 10 === 0) {
+        onProgress?.(`Minimizing: ${current.length} extras remaining...`);
+        await yieldUI();
+      }
+      const trial = current.filter((_, j) => j !== i);
+      const combined = musicGrid.map((row) => [...row]);
+      for (const [r, c] of trial) combined[r][c] = true;
+      if (await isLineSolvable(combined)) {
+        current = trial;
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  onProgress?.(`Done: ${current.length} extras needed in ${round} iterations`);
+  return { extras: current, iterations: round };
+}
+
+/** Check if a pattern is fully line-solvable (no guessing required). */
+async function isLineSolvable(pattern: boolean[][]): Promise<boolean> {
+  const rows = pattern.length;
+  const cols = pattern[0]?.length || 0;
+  const rowClues = pattern.map((row) => computeClues(row));
   const colClues: number[][] = [];
   for (let c = 0; c < cols; c++) {
-    colClues.push(computeClues(solution.map((row) => row[c])));
+    colClues.push(computeClues(pattern.map((row) => row[c])));
   }
 
-  const givens: [number, number][] = [];
-  const givenSet = new Set<string>();
+  const grid: Cell[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
+  const rowData = rowClues.map((clue) => generatePlacements(clue, cols));
+  const colData = colClues.map((clue) => generatePlacements(clue, rows));
 
-  function addGiven(r: number, c: number) {
-    const key = `${r},${c}`;
-    if (!givenSet.has(key)) {
-      givens.push([r, c]);
-      givenSet.add(key);
-    }
-  }
+  // If any line was capped, bail — we can't trust the check
+  for (const d of rowData) if (d.capped) return false;
+  for (const d of colData) if (d.capped) return false;
 
-  // --- Phase 1: Disambiguate duplicate clues (fast, no solver) ---
-  onProgress?.("Phase 1: fixing duplicate clues...");
-  await yieldUI();
+  let changed = true;
+  let iter = 0;
+  while (changed && iter < 100) {
+    changed = false;
+    iter++;
 
-  // Find rows with identical clues
-  const rowClueStr = rowClues.map((c) => c.join(","));
-  const rowGroups = new Map<string, number[]>();
-  rowClueStr.forEach((s, i) => {
-    if (!rowGroups.has(s)) rowGroups.set(s, []);
-    rowGroups.get(s)!.push(i);
-  });
-
-  // For each group of duplicate rows, reveal one note in all but one
-  for (const [, indices] of rowGroups) {
-    if (indices.length < 2) continue;
-    // Keep one row un-hinted, reveal a note in the rest
-    for (let i = 1; i < indices.length; i++) {
-      const r = indices[i];
-      // Find the first filled cell in this row
-      for (let c = 0; c < cols; c++) {
-        if (solution[r][c]) { addGiven(r, c); break; }
-      }
-    }
-  }
-
-  // Same for columns
-  const colClueStr = colClues.map((c) => c.join(","));
-  const colGroups = new Map<string, number[]>();
-  colClueStr.forEach((s, i) => {
-    if (!colGroups.has(s)) colGroups.set(s, []);
-    colGroups.get(s)!.push(i);
-  });
-
-  for (const [, indices] of colGroups) {
-    if (indices.length < 2) continue;
-    for (let i = 1; i < indices.length; i++) {
-      const c = indices[i];
-      for (let r = 0; r < rows; r++) {
-        if (solution[r][c]) { addGiven(r, c); break; }
-      }
-    }
-  }
-
-  onProgress?.(`Phase 1 done: ${givens.length} givens from duplicate clues`);
-  await yieldUI();
-
-  // --- Phase 2: Iterative solve with big batches ---
-  let round = 0;
-  const maxRounds = 50; // should never need this many
-  const batchPct = 0.05; // 5% of total cells per round
-
-  while (round < maxRounds) {
-    round++;
-    onProgress?.(`Phase 2, round ${round}: ${givens.length} givens, solving...`);
-    await yieldUI();
-
-    const result = await solveWithGivens(rows, cols, rowClues, colClues, solution, givenSet);
-
-    if (result.solved) {
-      // Easy difficulty: add bonus givens spread across rows
-      if (difficulty < 0.5) {
-        const bonusCount = Math.floor((1 - difficulty) * rows * 0.3);
-        const pool: [number, number][] = [];
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < cols; c++) {
-            if (solution[r][c] && !givenSet.has(`${r},${c}`)) pool.push([r, c]);
-          }
-        }
-        for (let i = pool.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [pool[i], pool[j]] = [pool[j], pool[i]];
-        }
-        for (let i = 0; i < Math.min(bonusCount, pool.length); i++) {
-          addGiven(pool[i][0], pool[i][1]);
-        }
-      }
-      break;
-    }
-
-    // Collect all unsolved note cells, scored by info gain
-    const candidates: { r: number; c: number; score: number }[] = [];
     for (let r = 0; r < rows; r++) {
+      const known = grid[r];
+      const valid = filterPlacements(rowData[r].placements, known);
+      rowData[r].placements = valid;
+      if (valid.length === 0) return false;
+      const deduced = deduceLine(valid, cols);
       for (let c = 0; c < cols; c++) {
-        if (!solution[r][c]) continue;
-        if (result.grid[r][c] !== 0) continue;
-        if (givenSet.has(`${r},${c}`)) continue;
-
-        const rowProb = result.problematic.find((p) => p.type === "row" && p.index === r);
-        const colProb = result.problematic.find((p) => p.type === "col" && p.index === c);
-        const rowNotes = rowClues[r].reduce((a, b) => a + b, 0) || 1;
-        const colNotes = colClues[c].reduce((a, b) => a + b, 0) || 1;
-        const rowGain = rowProb ? (1 / rowNotes) * rowProb.unknownCells : 0;
-        const colGain = colProb ? (1 / colNotes) * colProb.unknownCells : 0;
-        candidates.push({ r, c, score: rowGain + colGain });
+        if (grid[r][c] === 0 && deduced[c] !== 0) {
+          grid[r][c] = deduced[c];
+          changed = true;
+        }
       }
     }
 
-    if (candidates.length === 0) break;
-
-    candidates.sort((a, b) => b.score - a.score);
-    const batch = Math.max(5, Math.ceil(totalCells * batchPct));
-    const toReveal = candidates.slice(0, Math.min(batch, candidates.length));
-    for (const { r, c } of toReveal) {
-      addGiven(r, c);
+    for (let c = 0; c < cols; c++) {
+      const known: Cell[] = [];
+      for (let r = 0; r < rows; r++) known.push(grid[r][c]);
+      const valid = filterPlacements(colData[c].placements, known);
+      colData[c].placements = valid;
+      if (valid.length === 0) return false;
+      const deduced = deduceLine(valid, rows);
+      for (let r = 0; r < rows; r++) {
+        if (grid[r][c] === 0 && deduced[r] !== 0) {
+          grid[r][c] = deduced[r];
+          changed = true;
+        }
+      }
     }
   }
 
-  onProgress?.(`Done: ${givens.length} givens in ${round} rounds`);
-  return { givens, iterations: round };
+  // Fully resolved?
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (grid[r][c] === 0) return false;
+    }
+  }
+  return true;
 }
 
 async function solveWithGivens(
