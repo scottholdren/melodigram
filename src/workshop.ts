@@ -2,6 +2,11 @@ import * as Tone from "tone";
 import { loadPiano, ensureAudio, isSamplerReady } from "./audio";
 import { importFile, type ImportResult } from "./importers";
 import { checkSolvability, makePlayable } from "./solver";
+import { type RowSound, pianoRow, drumRow } from "./puzzles/types";
+import {
+  type InstrumentKey, gmProgramToInstrumentPrecise, preloadInstruments,
+  playRow as playInstrumentRow, scheduleRow as scheduleInstrumentRow,
+} from "./instruments";
 
 // --- Constants ---
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -40,6 +45,39 @@ const NOTE_COLORS: Record<string, string> = {
 
 function noteColorClass(note: string): string {
   return "note-" + note.replace(/[0-9#]/g, "");
+}
+
+// Helper: get program number from a track's instrument info
+function getProgramFromInstrument(track: { program: number }): number {
+  return track.program;
+}
+
+// GM drum names (MIDI note -> human label)
+const GM_DRUM_NAMES: Record<number, string> = {
+  35: "Acoustic Bass Drum", 36: "Bass Drum 1", 37: "Side Stick",
+  38: "Acoustic Snare", 39: "Hand Clap", 40: "Electric Snare",
+  41: "Low Floor Tom", 42: "Closed Hi-Hat", 43: "High Floor Tom",
+  44: "Pedal Hi-Hat", 45: "Low Tom", 46: "Open Hi-Hat",
+  47: "Low-Mid Tom", 48: "Hi-Mid Tom", 49: "Crash Cymbal 1",
+  50: "High Tom", 51: "Ride Cymbal 1", 52: "Chinese Cymbal",
+  53: "Ride Bell", 54: "Tambourine", 55: "Splash Cymbal",
+  56: "Cowbell", 57: "Crash Cymbal 2", 59: "Ride Cymbal 2",
+};
+
+// Map GM drum MIDI note to our drum sound name (from drum-sounds.ts)
+const GM_DRUM_TO_SOUND: Record<number, string> = {
+  35: "808 Kick", 36: "808 Kick", 37: "808 Rim",
+  38: "808 Snare", 39: "808 Clap", 40: "Break Snare",
+  41: "808 Lo Tom", 42: "808 Closed Hat", 43: "808 Lo Tom",
+  44: "808 Closed Hat", 45: "808 Hi Tom", 46: "808 Open Hat",
+  47: "808 Lo Tom", 48: "808 Hi Tom", 49: "808 Crash",
+  50: "808 Hi Tom", 51: "BB Ride", 52: "808 Crash",
+  53: "BB Ride", 54: "808 Rim", 55: "808 Crash",
+  56: "808 Rim", 57: "808 Crash", 59: "BB Ride",
+};
+
+function gmDrumNoteToSoundName(midi: number): string {
+  return GM_DRUM_TO_SOUND[midi] || "808 Kick";
 }
 
 // --- Instruments ---
@@ -116,7 +154,17 @@ const INSTRUMENTS: Instrument[] = [
 ];
 
 // --- State ---
+// workRows: the rows currently displayed in the piano roll. Each row has a
+// label + instrument + pitch/drumSound. Starts as every piano pitch, but
+// MIDI import can replace with track-specific rows using other instruments.
+let workRows: RowSound[] = ALL_PITCHES.map(pianoRow);
+// Legacy alias for existing code paths that only need the label
 let displayPitches: string[] = [...ALL_PITCHES];
+
+function setRows(rows: RowSound[]) {
+  workRows = rows;
+  displayPitches = rows.map((r) => r.label);
+}
 let steps = 32;
 let bpm = 120;
 let quantize: "4n" | "8n" | "16n" = "8n";
@@ -317,18 +365,32 @@ function renderRoll() {
 
   seqCells = [];
 
-  for (let r = 0; r < displayPitches.length; r++) {
-    const pitch = displayPitches[r];
-    const black = isBlackKey(pitch);
-    const isC = pitch.startsWith("C") && !pitch.startsWith("C#");
+  for (let r = 0; r < workRows.length; r++) {
+    const row = workRows[r];
+    const pitch = row.label;
+    // Only apply "black/white key" styling if this is a real piano pitch row
+    const looksPitched = row.instrument === "piano" && /^[A-G]#?\d$/.test(pitch);
+    const black = looksPitched && isBlackKey(pitch);
+    const isC = looksPitched && pitch.startsWith("C") && !pitch.startsWith("C#");
 
-    // Piano key
+    // Left-side label/key
     const key = document.createElement("div");
     key.className = `piano-key ${black ? "black" : "white"} ${isC ? "c-key" : ""}`;
-    key.textContent = isC ? pitch : (black ? "" : pitch.replace(/\d/, ""));
+    if (row.instrument === "drums") {
+      key.textContent = row.label;
+      key.title = `Drum: ${row.drumSound}`;
+      key.style.fontSize = "0.45rem";
+    } else if (row.instrument !== "piano") {
+      // Non-piano melodic instrument — show instrument + pitch
+      key.textContent = `${row.instrument.replace("synth-", "")}/${pitch}`;
+      key.style.fontSize = "0.45rem";
+    } else {
+      key.textContent = isC ? pitch : (black ? "" : pitch.replace(/\d/, ""));
+    }
     key.addEventListener("click", async () => {
       await ensureAudio(bpm);
-      triggerNote(pitch);
+      if (row.instrument === "piano" && row.pitch) triggerNote(row.pitch);
+      else playInstrumentRow(row.instrument, { pitch: row.pitch, drumSound: row.drumSound });
     });
     keys.appendChild(key);
 
@@ -344,17 +406,20 @@ function renderRoll() {
       if (c % 2 === 0) cell.classList.add("even-step");
 
       if (grid[r] && grid[r][c]) {
-        cell.classList.add("active", noteColorClass(pitch));
+        const cls = row.pitch ? noteColorClass(row.pitch) : "note-C";
+        cell.classList.add("active", cls);
       }
 
       const ri = r, ci = c;
+      const thisRow = row;
       cell.addEventListener("click", async () => {
         await ensureAudio(bpm);
         if (!grid[ri]) grid[ri] = Array(steps).fill(false);
         grid[ri][ci] = !grid[ri][ci];
         if (grid[ri][ci]) {
-          cell.classList.add("active", noteColorClass(displayPitches[ri]));
-          triggerNote(displayPitches[ri]);
+          const cls = thisRow.pitch ? noteColorClass(thisRow.pitch) : "note-C";
+          cell.classList.add("active", cls);
+          playInstrumentRow(thisRow.instrument, { pitch: thisRow.pitch, drumSound: thisRow.drumSound });
         } else {
           cell.className = "roll-cell";
           if (ci % 4 === 0) cell.classList.add("bar-line");
@@ -443,23 +508,137 @@ function applyImport(result: ImportResult) {
   steps = Math.max(16, Math.min(128, neededSteps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
 
-  // Reset grid to full keyboard
-  displayPitches = [...ALL_PITCHES];
-  grid = displayPitches.map(() => Array(steps).fill(false));
-
-  // Place notes
+  // Reset rows. If the importer gave us track info, build rows per track
+  // so each instrument is preserved. Otherwise fall back to full keyboard.
   let placed = 0;
-  for (const note of result.notes) {
-    const pitchName = midiToNote(note.midi);
-    const rowIndex = ALL_PITCHES.indexOf(pitchName);
-    if (rowIndex < 0) continue;
 
-    const startStep = Math.round(note.time / secPerStep);
-    const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
+  if (result.tracks && result.tracks.length > 0) {
+    // Build a set of rows per track, only for pitches that are actually used
+    const newRows: RowSound[] = [];
+    const rowKeyToIndex = new Map<string, number>();
 
-    for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
-      grid[rowIndex][s] = true;
-      placed++;
+    // Re-parse notes per track to preserve which track they came from
+    // (we only have a flat notes list here, so we regenerate rows based on
+    //  tracks + each track's pitch range and instrument)
+    const trackRowRanges: { trackIndex: number; rowStart: number; rowEnd: number; isDrums: boolean; inst: InstrumentKey }[] = [];
+
+    for (const t of result.tracks) {
+      if (t.noteCount === 0) continue;
+
+      const isDrums = t.isDrums;
+      const inst: InstrumentKey = isDrums ? "drums" : gmProgramToInstrumentPrecise(getProgramFromInstrument(t));
+      const rowStart = newRows.length;
+
+      if (isDrums) {
+        // For drum tracks: one row per unique MIDI note in the track,
+        // mapped to the nearest drum sound from our kit
+        const uniqueNotes = new Set<number>();
+        for (const n of result.notes) {
+          // We don't have per-track notes here, so we approximate by checking
+          // if the note's midi value is in this track's range and the track
+          // is drums. This won't be perfectly accurate for overlapping tracks.
+          if (isDrums && t.lowestNote !== null && t.highestNote !== null &&
+              n.midi >= t.lowestNote && n.midi <= t.highestNote) {
+            uniqueNotes.add(n.midi);
+          }
+        }
+        // Sort descending (higher MIDI = higher row visually)
+        const sorted = [...uniqueNotes].sort((a, b) => b - a);
+        for (const midi of sorted) {
+          const soundName = gmDrumNoteToSoundName(midi);
+          const label = `${soundName} (${GM_DRUM_NAMES[midi] || `note ${midi}`})`;
+          const key = `drum:${midi}`;
+          rowKeyToIndex.set(key, newRows.length);
+          newRows.push({ label, instrument: "drums", drumSound: soundName });
+        }
+      } else {
+        // For melodic tracks: create one row per pitch in the track's range
+        if (t.lowestNote !== null && t.highestNote !== null) {
+          for (let m = t.highestNote; m >= t.lowestNote; m--) {
+            const pitch = midiToNote(m);
+            const label = `${pitch}`;
+            const key = `${inst}:${pitch}`;
+            rowKeyToIndex.set(key, newRows.length);
+            newRows.push({ label, instrument: inst, pitch });
+          }
+        }
+      }
+
+      trackRowRanges.push({
+        trackIndex: t.index,
+        rowStart,
+        rowEnd: newRows.length,
+        isDrums,
+        inst,
+      });
+    }
+
+    if (newRows.length === 0) {
+      // Fall back: full piano keyboard
+      setRows(ALL_PITCHES.map(pianoRow));
+    } else {
+      setRows(newRows);
+    }
+
+    grid = workRows.map(() => Array(steps).fill(false));
+
+    // Place notes. For each flat note, find the track it belongs to by
+    // matching its midi against each track's pitch range.
+    for (const note of result.notes) {
+      // Find the best-matching track (first one whose range contains this note)
+      let targetRowKey: string | null = null;
+      for (const t of result.tracks) {
+        if (t.noteCount === 0) continue;
+        if (t.lowestNote !== null && t.highestNote !== null &&
+            note.midi >= t.lowestNote && note.midi <= t.highestNote) {
+          if (t.isDrums) {
+            targetRowKey = `drum:${note.midi}`;
+          } else {
+            const inst = gmProgramToInstrumentPrecise(getProgramFromInstrument(t));
+            targetRowKey = `${inst}:${midiToNote(note.midi)}`;
+          }
+          break;
+        }
+      }
+
+      if (targetRowKey === null) continue;
+      const rowIndex = rowKeyToIndex.get(targetRowKey);
+      if (rowIndex === undefined) continue;
+
+      const startStep = Math.round(note.time / secPerStep);
+      const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
+      for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
+        if (s >= 0) {
+          grid[rowIndex][s] = true;
+          placed++;
+        }
+      }
+    }
+
+    // Preload all instruments used
+    const instKeys = new Set<InstrumentKey>();
+    const drumNames: string[] = [];
+    for (const r of workRows) {
+      instKeys.add(r.instrument);
+      if (r.drumSound) drumNames.push(r.drumSound);
+    }
+    preloadInstruments([...instKeys], drumNames);
+  } else {
+    // No track info — use full piano keyboard
+    setRows(ALL_PITCHES.map(pianoRow));
+    grid = workRows.map(() => Array(steps).fill(false));
+
+    for (const note of result.notes) {
+      const pitchName = midiToNote(note.midi);
+      const rowIndex = ALL_PITCHES.indexOf(pitchName);
+      if (rowIndex < 0) continue;
+
+      const startStep = Math.round(note.time / secPerStep);
+      const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
+      for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
+        grid[rowIndex][s] = true;
+        placed++;
+      }
     }
   }
 
@@ -527,7 +706,6 @@ document.getElementById("midi-file")!.addEventListener("change", (e) => {
 async function playOnce(): Promise<void> {
   if (isPlaying) return;
   await ensureAudio(bpm);
-  if (usePiano && !isSamplerReady()) return;
 
   isPlaying = true;
   const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
@@ -537,28 +715,23 @@ async function playOnce(): Promise<void> {
   transport.cancel();
   transport.position = 0;
 
-  // Schedule notes with duration awareness
-  for (let r = 0; r < displayPitches.length; r++) {
+  // Schedule notes with duration awareness, using each row's instrument
+  for (let r = 0; r < workRows.length; r++) {
     if (!grid[r]) continue;
+    const rowSound = workRows[r];
     let c = 0;
     while (c < steps) {
       if (grid[r][c]) {
         let len = 1;
         while (c + len < steps && grid[r][c + len]) len++;
-        const note = displayPitches[r];
         const startTime = c * secPerStep;
         const dur = len * secPerStep * 0.85;
-
-        if (usePiano) {
-          import("./audio").then((mod) => {
-            mod.scheduleNote(note, startTime, dur);
-          });
-        } else if (synthInstance) {
-          const synth = synthInstance;
-          const st = startTime, d = dur, n = note;
-          transport.schedule((t) => synth.triggerAttackRelease(n, d, t), st);
-        }
-
+        scheduleInstrumentRow(
+          rowSound.instrument,
+          { pitch: rowSound.pitch, drumSound: rowSound.drumSound },
+          startTime,
+          dur,
+        );
         c += len;
       } else {
         c++;
@@ -1374,7 +1547,7 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
     return;
   }
 
-  const pitches = usedRows.map((i) => displayPitches[i]);
+  const usedWorkRows = usedRows.map((i) => workRows[i]);
 
   // Music grid: the user's notes
   const musicGrid = usedRows.map((i) => grid[i].slice(0, steps).map(Boolean));
@@ -1406,24 +1579,34 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
   const fmtRow = (row: boolean[]) =>
     "[" + row.map((v) => (v ? " true" : "false")).join(", ") + "]";
 
-  const pitchesArr = "[" + pitches.map((p) => `"${p}"`).join(", ") + "]";
+  // Format each row as a RowSound literal
+  const fmtRowSound = (r: RowSound) => {
+    const parts: string[] = [];
+    parts.push(`label: "${r.label.replace(/"/g, '\\"')}"`);
+    parts.push(`instrument: "${r.instrument}"`);
+    if (r.pitch) parts.push(`pitch: "${r.pitch}"`);
+    if (r.drumSound) parts.push(`drumSound: "${r.drumSound.replace(/"/g, '\\"')}"`);
+    return `    { ${parts.join(", ")} }`;
+  };
+
+  const rowsArr = usedWorkRows.map(fmtRowSound).join(",\n");
 
   const tsCode =
     `import type { Puzzle } from "./types";\n\n` +
-    `// ${title}${musicCount} music cells${extrasCount > 0 ? ` + ${extrasCount} silent extras` : ""}\n` +
+    `// ${title} — ${musicCount} music cells${extrasCount > 0 ? ` + ${extrasCount} silent extras` : ""}\n` +
     `const puzzle: Puzzle = {\n` +
     `  id: "${id}",\n` +
     `  title: "${title.replace(/"/g, '\\"')}",\n` +
     `  composer: "",\n` +
     `  category: "",\n` +
     `  difficulty: "easy",\n` +
-    `  pitches: ${pitchesArr},\n` +
     `  bpm: ${bpm},\n` +
+    `  rows: [\n${rowsArr},\n  ],\n` +
     `  music: [\n` +
-    musicGrid.map((row, i) => `    ${fmtRow(row)}, // ${pitches[i]}`).join("\n") + "\n" +
+    musicGrid.map((row, i) => `    ${fmtRow(row)}, // ${usedWorkRows[i].label}`).join("\n") + "\n" +
     `  ],\n` +
     `  extras: [\n` +
-    extrasGrid.map((row, i) => `    ${fmtRow(row)}, // ${pitches[i]}`).join("\n") + "\n" +
+    extrasGrid.map((row, i) => `    ${fmtRow(row)}, // ${usedWorkRows[i].label}`).join("\n") + "\n" +
     `  ],\n` +
     `};\n\n` +
     `export default puzzle;\n`;

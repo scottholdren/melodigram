@@ -20,6 +20,7 @@ export interface TrackInfo {
   channel: number;
   instrument: string;
   family: string;
+  program: number; // GM program number 0-127
   isDrums: boolean;
   noteCount: number;
   lowestNote: number | null;
@@ -122,6 +123,7 @@ function importMidi(buffer: ArrayBuffer): ImportResult {
       channel: track.channel,
       instrument: inst?.name || "Unknown",
       family: inst?.family || "unknown",
+      program: inst?.number ?? 0,
       isDrums: inst?.percussion === true || track.channel === 9,
       noteCount: track.notes.length,
       lowestNote: lowest,
