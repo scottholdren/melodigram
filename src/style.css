@@ -28,7 +28,110 @@ body {
   overflow-x: auto;
 }
 
-/* --- Nav --- */
+/* --- Level select --- */
+.level-select {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.level-select h2 {
+  font-size: 0.85rem;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #666;
+}
+
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  width: 100%;
+}
+
+.level-card {
+  background: #12121e;
+  border: 1px solid #2a2a3e;
+  border-radius: 10px;
+  padding: 1rem 1.2rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #ccc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-family: inherit;
+}
+
+.level-card:hover {
+  background: #1a1a2e;
+  border-color: #5566ff;
+  transform: translateY(-2px);
+}
+
+.level-title {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #eee;
+}
+
+.level-composer {
+  font-size: 0.75rem;
+  color: #777;
+  font-style: italic;
+}
+
+.level-difficulty {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 0.3rem;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  width: fit-content;
+}
+
+.difficulty-easy { background: #1a3e2a; color: #66dd88; }
+.difficulty-medium { background: #3e3a1a; color: #ddcc66; }
+.difficulty-hard { background: #3e1a1a; color: #dd6666; }
+
+/* --- Game view --- */
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.game-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.back-btn {
+  background: transparent;
+  color: #888;
+  border: 1px solid #333;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.back-btn:hover {
+  color: #ccc;
+  border-color: #666;
+}
+
+/* --- Nav (legacy, unused) --- */
 .nav {
   display: flex;
   gap: 0.5rem;
