@@ -8,17 +8,17 @@ const SAMPLE_BASE = "https://tonejs.github.io/audio/salamander/";
 
 // Load a subset of Salamander Grand Piano samples — Tone.js interpolates the rest
 const SAMPLE_MAP: Record<string, string> = {
-  C3: "C3v10.mp3",
-  "D#3": "Ds3v10.mp3",
-  "F#3": "Fs3v10.mp3",
-  A3: "A3v10.mp3",
-  C4: "C4v10.mp3",
-  "D#4": "Ds4v10.mp3",
-  "F#4": "Fs4v10.mp3",
-  A4: "A4v10.mp3",
-  C5: "C5v10.mp3",
-  "D#5": "Ds5v10.mp3",
-  "F#5": "Fs5v10.mp3",
+  C3: "C3.mp3",
+  "D#3": "Ds3.mp3",
+  "F#3": "Fs3.mp3",
+  A3: "A3.mp3",
+  C4: "C4.mp3",
+  "D#4": "Ds4.mp3",
+  "F#4": "Fs4.mp3",
+  A4: "A4.mp3",
+  C5: "C5.mp3",
+  "D#5": "Ds5.mp3",
+  "F#5": "Fs5.mp3",
 };
 
 export function isSamplerReady(): boolean {
