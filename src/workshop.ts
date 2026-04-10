@@ -239,7 +239,12 @@ function updateRowMuteStyling() {
 }
 let steps = 32;
 let bpm = 120;
-let quantize: "4n" | "8n" | "16n" = "8n";
+type QuantizeValue = "4n" | "8n" | "16n" | "32n";
+let quantize: QuantizeValue = "16n";
+
+function quantizeDivisor(q: QuantizeValue): number {
+  return q === "4n" ? 1 : q === "8n" ? 2 : q === "16n" ? 4 : 8;
+}
 let title = "My Beat";
 let grid: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
 let seqCells: HTMLDivElement[][] = [];
@@ -281,8 +286,9 @@ config.innerHTML = `
     <label>Quantize</label>
     <select id="cfg-quantize">
       <option value="4n">1/4 note</option>
-      <option value="8n" selected>1/8 note</option>
-      <option value="16n">1/16 note</option>
+      <option value="8n">1/8 note</option>
+      <option value="16n" selected>1/16 note</option>
+      <option value="32n">1/32 note</option>
     </select>
   </div>
   <div class="config-group">
@@ -536,7 +542,7 @@ document.getElementById("cfg-apply")!.addEventListener("click", applyConfig);
 function applyConfig() {
   const stepsVal = parseInt((document.getElementById("cfg-steps") as HTMLInputElement).value) || 32;
   const bpmVal = parseInt((document.getElementById("cfg-bpm") as HTMLInputElement).value) || 120;
-  const quantVal = (document.getElementById("cfg-quantize") as HTMLSelectElement).value as "4n" | "8n" | "16n";
+  const quantVal = (document.getElementById("cfg-quantize") as HTMLSelectElement).value as QuantizeValue;
   const instVal = parseInt((document.getElementById("cfg-instrument") as HTMLSelectElement).value) || 0;
   title = (document.getElementById("cfg-title") as HTMLInputElement).value || "My Beat";
 
@@ -718,7 +724,35 @@ function applyImport(result: ImportResult) {
     (document.getElementById("cfg-bpm") as HTMLInputElement).value = String(bpm);
   }
 
-  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
+  // Auto-detect the best quantize based on the finest onset spacing in the MIDI.
+  // We need a step size <= the smallest gap between consecutive note onsets, or
+  // melodic runs will collapse onto the same step and sound dissonant.
+  if (result.tracks && result.tracks.length > 0) {
+    const onsetTimes: number[] = [];
+    for (const t of result.tracks) {
+      if (!t.notes) continue;
+      for (const n of t.notes) onsetTimes.push(n.time);
+    }
+    onsetTimes.sort((a, b) => a - b);
+    let minGap = Infinity;
+    for (let i = 1; i < onsetTimes.length; i++) {
+      const gap = onsetTimes[i] - onsetTimes[i - 1];
+      if (gap > 0.001 && gap < minGap) minGap = gap;
+    }
+    // Pick the coarsest quantize where secPerStep <= minGap * 1.1 (small tolerance)
+    const candidates: QuantizeValue[] = ["4n", "8n", "16n", "32n"];
+    let chosen: QuantizeValue = "16n";
+    for (const q of candidates) {
+      const sec = 60 / bpm / quantizeDivisor(q);
+      if (sec <= minGap * 1.1) chosen = q;
+    }
+    // But never coarser than 16n for MIDI (busy music tends to have 16ths)
+    if (chosen === "4n" || chosen === "8n") chosen = "16n";
+    quantize = chosen;
+    (document.getElementById("cfg-quantize") as HTMLSelectElement).value = chosen;
+  }
+
+  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
 
   // Auto-set steps from content
   const maxTime = Math.max(...result.notes.map((n) => n.time + n.duration));
@@ -902,7 +936,7 @@ async function playOnce(): Promise<void> {
   await ensureAudio(bpm);
 
   isPlaying = true;
-  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
+  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
 
   const transport = Tone.getTransport();
   transport.stop();
@@ -1001,8 +1035,8 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
   (document.getElementById("cfg-title") as HTMLInputElement).value = "My Beat";
   // Reset quantize
-  quantize = "8n";
-  (document.getElementById("cfg-quantize") as HTMLSelectElement).value = "8n";
+  quantize = "16n";
+  (document.getElementById("cfg-quantize") as HTMLSelectElement).value = "16n";
   // Reset file input so same file can be re-imported
   const fileInput = document.getElementById("midi-file") as HTMLInputElement;
   if (fileInput) fileInput.value = "";
@@ -1682,7 +1716,7 @@ function revealSolution() {
 
 async function playTestPlayMelody() {
   await ensureAudio(bpm);
-  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
+  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
   const transport = Tone.getTransport();
   transport.stop();
   transport.cancel();
