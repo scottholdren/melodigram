@@ -56,6 +56,13 @@ workshopLink.textContent = "Workshop";
 workshopLink.style.textDecoration = "none";
 nav.appendChild(workshopLink);
 
+const drumsLink = document.createElement("a");
+drumsLink.href = "drums.html";
+drumsLink.className = "nav-btn";
+drumsLink.textContent = "Drums";
+drumsLink.style.textDecoration = "none";
+nav.appendChild(drumsLink);
+
 // --- Main containers ---
 const title = document.createElement("h1");
 title.textContent = "Melodigram";

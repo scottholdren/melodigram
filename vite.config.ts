@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         workshop: resolve(__dirname, "workshop.html"),
+        drums: resolve(__dirname, "drums.html"),
       },
     },
   },

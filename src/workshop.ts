@@ -136,7 +136,7 @@ const app = document.getElementById("app")!;
 // Header
 const header = document.createElement("div");
 header.className = "header";
-header.innerHTML = `<h1>Workshop</h1><a href="index.html">&larr; Back to game</a>`;
+header.innerHTML = `<h1>Workshop</h1><div style="display:flex;gap:1rem"><a href="drums.html" style="color:#5566ff;text-decoration:none;font-size:0.75rem">Drums</a><a href="index.html" style="color:#5566ff;text-decoration:none;font-size:0.75rem">Game</a></div>`;
 app.appendChild(header);
 
 // Top config bar
