@@ -488,8 +488,10 @@ midiDrop.addEventListener("drop", (e) => {
   if (file) handleFile(file);
 });
 document.getElementById("midi-file")!.addEventListener("change", (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (file) handleFile(file);
+  input.value = ""; // reset so same file can be re-imported
 });
 
 // --- Playback ---
@@ -597,6 +599,14 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   (document.getElementById("cfg-steps") as HTMLInputElement).value = "32";
   (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
   (document.getElementById("cfg-title") as HTMLInputElement).value = "My Beat";
+  // Reset quantize
+  quantize = "8n";
+  (document.getElementById("cfg-quantize") as HTMLSelectElement).value = "8n";
+  // Reset file input so same file can be re-imported
+  const fileInput = document.getElementById("midi-file") as HTMLInputElement;
+  if (fileInput) fileInput.value = "";
+  // Hide difficulty slider
+  document.getElementById("difficulty-wrap")!.style.display = "none";
   // Clear status and export
   status.textContent = "";
   exportOutput.style.display = "none";
