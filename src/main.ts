@@ -1,65 +1,29 @@
-import * as Tone from "tone";
-import { loadPiano, ensureAudio, playNote, scheduleNote, getTransport } from "./audio";
-import { PUZZLES, combined, isMusic, isExtra, type Puzzle } from "./puzzles";
-import { ALL_SOUNDS } from "./drum-sounds";
+import { ensureAudio, getTransport } from "./audio";
+import { PUZZLES, combined, isMusic, type Puzzle } from "./puzzles";
+import {
+  preloadInstruments, playRow, scheduleRow, getRowColor as getInstrColor,
+  type InstrumentKey,
+} from "./instruments";
 
-// --- Drum player (on-demand sample loading) ---
-const drumPlayers: Map<string, Tone.Player> = new Map();
-
-function loadDrumSample(url: string): Promise<Tone.Player> {
-  if (drumPlayers.has(url)) return Promise.resolve(drumPlayers.get(url)!);
-  return new Promise((resolve) => {
-    const p = new Tone.Player({
-      url,
-      onload: () => { drumPlayers.set(url, p); resolve(p); },
-      onerror: () => { resolve(p); },
-    }).toDestination();
-  });
+// Play a row using its instrument registry entry
+function playPuzzleRow(puzzle: Puzzle, rowIndex: number) {
+  const row = puzzle.rows[rowIndex];
+  playRow(row.instrument, { pitch: row.pitch, drumSound: row.drumSound });
 }
 
-function getDrumSoundByName(name: string) {
-  return ALL_SOUNDS.find((s) => s.name === name);
+function schedulePuzzleRow(puzzle: Puzzle, rowIndex: number, startTime: number, duration: number) {
+  const row = puzzle.rows[rowIndex];
+  scheduleRow(row.instrument, { pitch: row.pitch, drumSound: row.drumSound }, startTime, duration);
 }
 
-async function loadDrumPuzzleSamples(puzzle: Puzzle) {
-  const urls = puzzle.pitches
-    .map((n) => getDrumSoundByName(n)?.url)
-    .filter((u): u is string => !!u);
-  await Promise.all(urls.map((u) => loadDrumSample(u)));
-}
-
-function playDrumHit(soundName: string) {
-  const sound = getDrumSoundByName(soundName);
-  if (!sound) return;
-  const player = drumPlayers.get(sound.url);
-  if (player?.loaded) {
-    player.stop();
-    player.start();
+async function loadPuzzleSamples(puzzle: Puzzle) {
+  const keys = new Set<InstrumentKey>();
+  const drumNames: string[] = [];
+  for (const row of puzzle.rows) {
+    keys.add(row.instrument);
+    if (row.drumSound) drumNames.push(row.drumSound);
   }
-}
-
-function scheduleDrumHit(soundName: string, startTime: number) {
-  const sound = getDrumSoundByName(soundName);
-  if (!sound) return;
-  const player = drumPlayers.get(sound.url);
-  if (!player?.loaded) return;
-  Tone.getTransport().schedule((time) => {
-    player.stop(time);
-    player.start(time);
-  }, startTime);
-}
-
-// Unified audio helpers: dispatch to piano or drums based on puzzle kind
-function playRowNote(puzzle: Puzzle, rowIndex: number) {
-  const label = puzzle.pitches[rowIndex];
-  if (puzzle.kind === "drums") playDrumHit(label);
-  else playNote(label);
-}
-
-function scheduleRowNote(puzzle: Puzzle, rowIndex: number, startTime: number, duration: number) {
-  const label = puzzle.pitches[rowIndex];
-  if (puzzle.kind === "drums") scheduleDrumHit(label, startTime);
-  else scheduleNote(label, startTime, duration);
+  await preloadInstruments([...keys], drumNames);
 }
 
 // --- Clue computation ---
@@ -74,22 +38,9 @@ function computeClues(line: boolean[]): number[] {
 }
 
 // --- Color mapping ---
-const NOTE_COLORS: Record<string, string> = {
-  C: "#ff3355", D: "#ff8833", E: "#ffdd33",
-  F: "#33dd77", G: "#33ccff", A: "#5566ff", B: "#aa44ff",
-};
-
-function getNoteColor(note: string): string {
-  return NOTE_COLORS[note.replace(/[0-9#b]/g, "")] || "#888";
-}
-
 function getRowColor(puzzle: Puzzle, rowIndex: number): string {
-  const label = puzzle.pitches[rowIndex];
-  if (puzzle.kind === "drums") {
-    const sound = getDrumSoundByName(label);
-    return sound?.color || "#888";
-  }
-  return getNoteColor(label);
+  const row = puzzle.rows[rowIndex];
+  return getInstrColor(row.instrument, { pitch: row.pitch, drumSound: row.drumSound });
 }
 
 // --- State ---
@@ -166,7 +117,8 @@ hint.className = "hint";
 hint.textContent = "Click: fill · Again: mark X · Again: clear";
 gameContainer.appendChild(hint);
 
-// --- Load piano samples ---
+// --- Preload piano samples so the level select loads quickly on click ---
+import { loadPiano } from "./audio";
 loadPiano().then(() => {
   loadingEl.style.display = "none";
 });
@@ -214,7 +166,7 @@ function loadPuzzle(puzzle: Puzzle) {
   currentPuzzle = puzzle;
   isSolved = false;
 
-  const PITCHES = puzzle.pitches;
+  const ROWS = puzzle.rows;
   const BEATS = puzzle.music[0].length;
 
   combinedGrid = combined(puzzle);
@@ -225,10 +177,10 @@ function loadPuzzle(puzzle: Puzzle) {
     colClues.push(computeClues(combinedGrid.map((row) => row[col])));
   }
 
-  grid = Array.from({ length: PITCHES.length }, () => Array(BEATS).fill("empty"));
+  grid = Array.from({ length: ROWS.length }, () => Array(BEATS).fill("empty"));
 
   // Cell sizing
-  const isLarge = BEATS > 10 || PITCHES.length > 8;
+  const isLarge = BEATS > 10 || ROWS.length > 8;
   const cellSize = isLarge ? 32 : 44;
   document.documentElement.style.setProperty("--cell-size", cellSize + "px");
 
@@ -236,10 +188,8 @@ function loadPuzzle(puzzle: Puzzle) {
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
   location.hash = puzzle.id;
 
-  // Pre-load drum samples if needed
-  if (puzzle.kind === "drums") {
-    loadDrumPuzzleSamples(puzzle);
-  }
+  // Pre-load samples for all instruments used by this puzzle
+  loadPuzzleSamples(puzzle);
 
   showGame();
   renderGrid();
@@ -247,7 +197,7 @@ function loadPuzzle(puzzle: Puzzle) {
 
 function renderGrid() {
   if (!currentPuzzle) return;
-  const PITCHES = currentPuzzle.pitches;
+  const ROWS = currentPuzzle.rows;
   const BEATS = currentPuzzle.music[0].length;
 
   puzzleTable.innerHTML = "";
@@ -284,7 +234,7 @@ function renderGrid() {
   puzzleTable.appendChild(colClueRow);
 
   // Grid rows
-  for (let row = 0; row < PITCHES.length; row++) {
+  for (let row = 0; row < ROWS.length; row++) {
     cells[row] = [];
     const rowEl = document.createElement("div");
     rowEl.className = "puzzle-row";
@@ -304,7 +254,6 @@ function renderGrid() {
       cell.addEventListener("click", async () => {
         if (isPlaying || isSolved || !currentPuzzle) return;
         await ensureAudio(currentPuzzle.bpm);
-        const note = PITCHES[r];
         const cellIsMusic = isMusic(currentPuzzle, r, c);
 
         if (grid[r][c] === "empty") {
@@ -312,11 +261,9 @@ function renderGrid() {
           cell.classList.add("filled");
           cell.classList.remove("marked");
           cell.textContent = "";
-          // Generic fill color while solving
           cell.style.backgroundColor = "#5566ff";
           cell.style.boxShadow = "0 0 10px #5566ff66";
-          // Music cells play sound, extras are silent
-          if (cellIsMusic) playRowNote(currentPuzzle, r);
+          if (cellIsMusic) playPuzzleRow(currentPuzzle, r);
         } else if (grid[r][c] === "filled") {
           grid[r][c] = "marked";
           cell.classList.remove("filled");
@@ -347,7 +294,7 @@ function renderGrid() {
 
     const pitchLabel = document.createElement("div");
     pitchLabel.className = "pitch-label";
-    pitchLabel.textContent = PITCHES[row];
+    pitchLabel.textContent = ROWS[row].label;
     rowEl.appendChild(pitchLabel);
 
     puzzleTable.appendChild(rowEl);
@@ -369,8 +316,8 @@ function checkSolved(): boolean {
 // --- Reveal: music cells get colored, extras stay gray ---
 function revealCells() {
   if (!currentPuzzle) return;
-  const PITCHES = currentPuzzle.pitches;
-  for (let r = 0; r < PITCHES.length; r++) {
+  const ROWS = currentPuzzle.rows;
+  for (let r = 0; r < ROWS.length; r++) {
     for (let c = 0; c < cells[r].length; c++) {
       if (!combinedGrid[r][c]) continue;
       const cell = cells[r][c];
@@ -394,7 +341,7 @@ async function playMelody(): Promise<void> {
   playBtn.disabled = true;
   clearBtn.disabled = true;
 
-  const PITCHES = currentPuzzle.pitches;
+  const ROWS = currentPuzzle.rows;
   const BEATS = currentPuzzle.music[0].length;
   const secPerBeat = 60 / currentPuzzle.bpm;
 
@@ -404,13 +351,13 @@ async function playMelody(): Promise<void> {
   transport.position = 0;
 
   // Schedule only music cells
-  for (let r = 0; r < PITCHES.length; r++) {
+  for (let r = 0; r < ROWS.length; r++) {
     let c = 0;
     while (c < BEATS) {
       if (currentPuzzle.music[r][c]) {
         let len = 1;
         while (c + len < BEATS && currentPuzzle.music[r][c + len]) len++;
-        scheduleRowNote(currentPuzzle, r, c * secPerBeat, len * secPerBeat * 0.9);
+        schedulePuzzleRow(currentPuzzle, r, c * secPerBeat, len * secPerBeat * 0.9);
         c += len;
       } else {
         c++;
@@ -422,7 +369,7 @@ async function playMelody(): Promise<void> {
 
   // Animate playhead
   for (let col = 0; col < BEATS; col++) {
-    for (let row = 0; row < PITCHES.length; row++) {
+    for (let row = 0; row < ROWS.length; row++) {
       const cell = cells[row][col];
       cell.classList.add("active-col");
       if (isMusic(currentPuzzle, row, col)) {
@@ -430,7 +377,7 @@ async function playMelody(): Promise<void> {
       }
     }
     await sleep(secPerBeat * 1000);
-    for (let row = 0; row < PITCHES.length; row++) {
+    for (let row = 0; row < ROWS.length; row++) {
       const cell = cells[row][col];
       cell.classList.remove("active-col", "playing");
     }
@@ -462,8 +409,8 @@ async function autoSolve() {
   autoBtn.textContent = "Stop";
   await ensureAudio(currentPuzzle.bpm);
 
-  const PITCHES = currentPuzzle.pitches;
-  const rows = PITCHES.length;
+  const ROWS = currentPuzzle.rows;
+  const rows = ROWS.length;
   const cols = combinedGrid[0].length;
 
   // Placement generator for a line
@@ -532,7 +479,7 @@ async function autoSolve() {
       cell.style.boxShadow = "0 0 10px #5566ff88";
       // Play note only for music cells
       if (isMusic(currentPuzzle, r, c)) {
-        playRowNote(currentPuzzle, r);
+        playPuzzleRow(currentPuzzle, r);
       }
     } else {
       grid[r][c] = "marked";
@@ -607,9 +554,9 @@ clearBtn.addEventListener("click", () => {
   isSolved = false;
   subtitle.textContent = "Fill in the grid using the clues";
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
-  const PITCHES = currentPuzzle.pitches;
+  const ROWS = currentPuzzle.rows;
   const BEATS = currentPuzzle.music[0].length;
-  for (let r = 0; r < PITCHES.length; r++) {
+  for (let r = 0; r < ROWS.length; r++) {
     for (let c = 0; c < BEATS; c++) {
       grid[r][c] = "empty";
       const cell = cells[r][c];

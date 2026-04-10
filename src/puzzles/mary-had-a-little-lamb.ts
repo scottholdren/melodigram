@@ -1,16 +1,22 @@
 import type { Puzzle } from "./types";
+import { pianoRow } from "./types";
 
-// Mary Had a Little Lamb — first phrase
-// E D C D E E E with bass accompaniment
-// 1 silent extra added to make it fully line-solvable.
 const puzzle: Puzzle = {
   id: "mary-had-a-little-lamb",
   title: "Mary Had a Little Lamb",
   composer: "Traditional",
   category: "Classic",
   difficulty: "easy",
-  pitches: ["G4", "F4", "E4", "D4", "C4", "G3", "C3"],
   bpm: 100,
+  rows: [
+    pianoRow("G4"),
+    pianoRow("F4"),
+    pianoRow("E4"),
+    pianoRow("D4"),
+    pianoRow("C4"),
+    pianoRow("G3"),
+    pianoRow("C3"),
+  ],
   music: [
     //  1      2      3      4      5      6      7
     [false, false, false, false, false, false, false], // G4
@@ -25,7 +31,7 @@ const puzzle: Puzzle = {
     [false, false, false, false, false, false, false],
     [false, false, false, false, false, false, false],
     [false, false, false, false, false, false, false],
-    [false, false,  true, false, false, false, false], // extra
+    [false, false,  true, false, false, false, false],
     [false, false, false, false, false, false, false],
     [false, false, false, false, false, false, false],
     [false, false, false, false, false, false, false],

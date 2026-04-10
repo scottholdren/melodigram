@@ -1,16 +1,11 @@
+import type { InstrumentKey } from "../instruments";
+
 /**
- * Puzzle data format for the player.
+ * Puzzle data format.
  *
- * A puzzle has two layers:
- * - `music`: cells that play notes when filled
- * - `extras`: silent cells added for puzzle solvability (show in clues, no audio)
- *
- * The nonogram clues are computed from the combined pattern (music OR extras).
- *
- * Two kinds of puzzles:
- * - "piano" (default): rows are pitches like "C4", "G3". Plays piano samples.
- * - "drums": rows are drum sound names from drum-sounds.ts (e.g. "808 Kick").
- *   Plays drum samples. "pitches" field still stores the row labels.
+ * A puzzle is a grid with row labels + per-row instruments. Each row has
+ * its own sound: piano notes, drum hits, synth bass, strings, whatever.
+ * The music and extras grids tell you which cells are filled.
  */
 export interface Puzzle {
   id: string;
@@ -18,11 +13,22 @@ export interface Puzzle {
   composer?: string;
   category?: string;
   difficulty?: "easy" | "medium" | "hard";
-  kind?: "piano" | "drums"; // default: "piano"
-  pitches: string[]; // row labels top-to-bottom
   bpm: number;
-  music: boolean[][]; // rows × cols
-  extras: boolean[][]; // rows × cols (same dimensions as music)
+
+  rows: RowSound[];
+  music: boolean[][];
+  extras: boolean[][];
+}
+
+export interface RowSound {
+  /** Display label shown to the right of the row (e.g. "C4", "808 Kick") */
+  label: string;
+  /** Which instrument plays this row */
+  instrument: InstrumentKey;
+  /** For pitched instruments: the pitch to play (e.g. "C4"). Required unless drumSound is set. */
+  pitch?: string;
+  /** For drum rows: the sound name from drum-sounds.ts */
+  drumSound?: string;
 }
 
 /** Compute combined pattern = music OR extras */
@@ -32,12 +38,20 @@ export function combined(p: Puzzle): boolean[][] {
   );
 }
 
-/** Is a cell a music cell in this puzzle? */
 export function isMusic(p: Puzzle, r: number, c: number): boolean {
   return p.music[r]?.[c] === true;
 }
 
-/** Is a cell an extra (silent) in this puzzle? */
 export function isExtra(p: Puzzle, r: number, c: number): boolean {
   return !isMusic(p, r, c) && p.extras[r]?.[c] === true;
+}
+
+/** Helper: build a piano row from a pitch string */
+export function pianoRow(pitch: string): RowSound {
+  return { label: pitch, instrument: "piano", pitch };
+}
+
+/** Helper: build a drum row from a sound name */
+export function drumRow(soundName: string): RowSound {
+  return { label: soundName, instrument: "drums", drumSound: soundName };
 }

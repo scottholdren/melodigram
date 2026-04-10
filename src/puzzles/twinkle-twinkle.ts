@@ -1,16 +1,23 @@
 import type { Puzzle } from "./types";
+import { pianoRow } from "./types";
 
-// Twinkle Twinkle Little Star — first phrase
-// C C G G A A G with basic bass accompaniment
-// No extras needed — the music alone is line-solvable.
 const puzzle: Puzzle = {
   id: "twinkle-twinkle",
   title: "Twinkle Twinkle Little Star",
   composer: "Traditional",
   category: "Classic",
   difficulty: "easy",
-  pitches: ["A4", "G4", "F4", "E4", "D4", "C4", "G3", "C3"],
   bpm: 100,
+  rows: [
+    pianoRow("A4"),
+    pianoRow("G4"),
+    pianoRow("F4"),
+    pianoRow("E4"),
+    pianoRow("D4"),
+    pianoRow("C4"),
+    pianoRow("G3"),
+    pianoRow("C3"),
+  ],
   music: [
     //  1      2      3      4      5      6      7
     [false, false, false, false,  true,  true, false], // A4
