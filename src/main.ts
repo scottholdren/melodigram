@@ -44,6 +44,7 @@ app.appendChild(nav);
 ALL_PUZZLES.forEach((puzzle) => {
   const btn = document.createElement("button");
   btn.className = "nav-btn";
+  btn.setAttribute("data-puzzle-id", puzzle.id);
   btn.textContent = puzzle.id === "ode-to-joy" ? "Ode to Joy" : "The Entertainer";
   btn.addEventListener("click", () => loadPuzzle(puzzle));
   nav.appendChild(btn);
@@ -135,8 +136,8 @@ function loadPuzzle(puzzle: Puzzle) {
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
 
   // Update nav active state
-  nav.querySelectorAll(".nav-btn").forEach((btn, i) => {
-    btn.classList.toggle("active", ALL_PUZZLES[i].id === puzzle.id);
+  nav.querySelectorAll("[data-puzzle-id]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-puzzle-id") === puzzle.id);
   });
 
   // Size cells based on grid size
