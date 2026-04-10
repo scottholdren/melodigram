@@ -1,0 +1,296 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --cell-size: 28px;
+}
+
+body {
+  background: #0a0a0f;
+  color: #e0e0e0;
+  font-family: system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+#app {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+/* --- Header --- */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header h1 {
+  font-size: 1.2rem;
+  font-weight: 300;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.header a {
+  color: #5566ff;
+  text-decoration: none;
+  font-size: 0.8rem;
+}
+
+.header a:hover {
+  text-decoration: underline;
+}
+
+/* --- Config panel --- */
+.config {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: flex-end;
+  padding: 1rem;
+  background: #12121e;
+  border-radius: 8px;
+  border: 1px solid #22223a;
+}
+
+.config-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.config-group label {
+  font-size: 0.7rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.config-group input,
+.config-group select {
+  background: #1a1a2e;
+  color: #ccc;
+  border: 1px solid #3a3a5e;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: monospace;
+  width: 80px;
+}
+
+.config-group select {
+  width: auto;
+}
+
+.config-group input:focus,
+.config-group select:focus {
+  outline: none;
+  border-color: #5566ff;
+}
+
+/* --- Pitch selector --- */
+.pitch-selector {
+  padding: 1rem;
+  background: #12121e;
+  border-radius: 8px;
+  border: 1px solid #22223a;
+}
+
+.pitch-selector h3 {
+  font-size: 0.7rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.5rem;
+}
+
+.piano-keys {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.piano-key {
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-family: monospace;
+  cursor: pointer;
+  border: 1px solid #333;
+  transition: all 0.15s;
+  min-width: 38px;
+  text-align: center;
+}
+
+.piano-key.white {
+  background: #2a2a3e;
+  color: #aaa;
+}
+
+.piano-key.black {
+  background: #16162a;
+  color: #777;
+}
+
+.piano-key.selected {
+  border-color: #5566ff;
+  background: #2a2a5e;
+  color: #fff;
+}
+
+.piano-key:hover {
+  border-color: #5566ff88;
+}
+
+/* --- Sequencer grid --- */
+.sequencer-wrap {
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.sequencer {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.seq-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.seq-label {
+  width: 44px;
+  min-width: 44px;
+  font-size: 0.6rem;
+  font-family: monospace;
+  color: #666;
+  text-align: right;
+  padding-right: 6px;
+}
+
+.seq-cell {
+  width: var(--cell-size);
+  height: var(--cell-size);
+  min-width: var(--cell-size);
+  background: #14141e;
+  border: 1px solid #1e1e30;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+.seq-cell.even {
+  background: #18182a;
+}
+
+.seq-cell.beat-start {
+  border-left: 2px solid #2a2a4a;
+}
+
+.seq-cell.active {
+  border-color: transparent;
+}
+
+.seq-cell:hover {
+  border-color: #44446a;
+}
+
+/* --- Beat numbers --- */
+.beat-numbers {
+  display: flex;
+  gap: 1px;
+  margin-left: 44px;
+  margin-bottom: 2px;
+}
+
+.beat-num {
+  width: var(--cell-size);
+  min-width: var(--cell-size);
+  font-size: 0.55rem;
+  font-family: monospace;
+  color: #444;
+  text-align: center;
+}
+
+/* playhead column highlight */
+.seq-cell.playhead {
+  border-color: #ffffff33;
+  box-shadow: 0 0 8px #ffffff11;
+}
+
+/* --- Controls --- */
+.controls {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+button {
+  background: #1a1a2e;
+  color: #ccc;
+  border: 1px solid #3a3a5e;
+  padding: 0.5rem 1.2rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+button:hover {
+  background: #2a2a4e;
+  border-color: #5a5a8e;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  border-color: #5566ff;
+  color: #8899ff;
+}
+
+button.primary:hover {
+  background: #1e1e4e;
+}
+
+/* --- Export output --- */
+.export-output {
+  background: #0e0e18;
+  border: 1px solid #22223a;
+  border-radius: 8px;
+  padding: 1rem;
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: #8899ff;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  display: none;
+}
+
+.status {
+  font-size: 0.75rem;
+  color: #555;
+}
+
+/* Note colors */
+.note-C { background: #ff335544; box-shadow: 0 0 8px #ff335522; }
+.note-D { background: #ff883344; box-shadow: 0 0 8px #ff883322; }
+.note-E { background: #ffdd3344; box-shadow: 0 0 8px #ffdd3322; }
+.note-F { background: #33dd7744; box-shadow: 0 0 8px #33dd7722; }
+.note-G { background: #33ccff44; box-shadow: 0 0 8px #33ccff22; }
+.note-A { background: #5566ff44; box-shadow: 0 0 8px #5566ff22; }
+.note-B { background: #aa44ff44; box-shadow: 0 0 8px #aa44ff22; }

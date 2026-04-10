@@ -49,6 +49,13 @@ ALL_PUZZLES.forEach((puzzle) => {
   nav.appendChild(btn);
 });
 
+const workshopLink = document.createElement("a");
+workshopLink.href = "workshop.html";
+workshopLink.className = "nav-btn";
+workshopLink.textContent = "Workshop";
+workshopLink.style.textDecoration = "none";
+nav.appendChild(workshopLink);
+
 // --- Main containers ---
 const title = document.createElement("h1");
 title.textContent = "Melodigram";
