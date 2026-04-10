@@ -1335,10 +1335,16 @@ function computeClues(line: boolean[]): number[] {
 }
 
 document.getElementById("btn-export")!.addEventListener("click", () => {
-  // Find used rows only
+  // Find used rows only (any row with music or extras)
   const usedRows: number[] = [];
   for (let r = 0; r < displayPitches.length; r++) {
-    if (grid[r]?.some(Boolean)) usedRows.push(r);
+    const hasMusic = grid[r]?.some(Boolean);
+    const hasExtra = [...extrasSet].some((k) => {
+      const [er] = k.split(",").map(Number);
+      // extrasSet uses solution-space row indices; map back through extrasUsedRows
+      return extrasUsedRows[er] === r;
+    });
+    if (hasMusic || hasExtra) usedRows.push(r);
   }
 
   if (usedRows.length === 0) {
@@ -1347,36 +1353,71 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
   }
 
   const pitches = usedRows.map((i) => displayPitches[i]);
-  const solution = usedRows.map((i) => grid[i].slice(0, steps));
-  const filledCount = solution.flat().filter(Boolean).length;
 
-  const rowClues = solution.map((row) => computeClues(row));
-  const colClues: number[][] = [];
-  for (let c = 0; c < steps; c++) {
-    colClues.push(computeClues(solution.map((row) => row[c])));
+  // Music grid: the user's notes
+  const musicGrid = usedRows.map((i) => grid[i].slice(0, steps).map(Boolean));
+
+  // Extras grid: rebuild from extrasSet, remapping indices to usedRows space
+  const extrasGrid: boolean[][] = usedRows.map(() => Array(steps).fill(false));
+  for (const key of extrasSet) {
+    const [exR, exC] = key.split(",").map(Number);
+    const origRow = extrasUsedRows[exR];
+    if (origRow === undefined) continue;
+    const newR = usedRows.indexOf(origRow);
+    if (newR >= 0 && exC < steps) extrasGrid[newR][exC] = true;
   }
 
-  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+$/, "");
+  const combined = musicGrid.map((row, r) =>
+    row.map((m, c) => m || extrasGrid[r][c])
+  );
+  const rowClues = combined.map((row) => computeClues(row));
+  const colClues: number[][] = [];
+  for (let c = 0; c < steps; c++) {
+    colClues.push(computeClues(combined.map((row) => row[c])));
+  }
 
-  const puzzle = { id, title: "Can you hear it?", revealTitle: title, pitches, bpm, solution };
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-+$/g, "") || "my-puzzle";
+  const musicCount = musicGrid.flat().filter(Boolean).length;
+  const extrasCount = extrasGrid.flat().filter(Boolean).length;
 
-  const tsCode = JSON.stringify(puzzle, null, 2);
+  // Format a boolean row as ` true`/`false` for consistency with existing puzzle files
+  const fmtRow = (row: boolean[]) =>
+    "[" + row.map((v) => (v ? " true" : "false")).join(", ") + "]";
 
-  // Shareable URL
-  const compressed = { t: title, p: pitches, b: bpm, s: solution.map((row) => row.map((v) => v ? 1 : 0)) };
-  const encoded = btoa(JSON.stringify(compressed));
-  const shareUrl = `${location.origin}${location.pathname.replace("workshop.html", "")}#puzzle=${encoded}`;
+  const pitchesArr = "[" + pitches.map((p) => `"${p}"`).join(", ") + "]";
+
+  const tsCode =
+    `import type { Puzzle } from "./types";\n\n` +
+    `// ${title}${musicCount} music cells${extrasCount > 0 ? ` + ${extrasCount} silent extras` : ""}\n` +
+    `const puzzle: Puzzle = {\n` +
+    `  id: "${id}",\n` +
+    `  title: "${title.replace(/"/g, '\\"')}",\n` +
+    `  composer: "",\n` +
+    `  category: "",\n` +
+    `  difficulty: "easy",\n` +
+    `  pitches: ${pitchesArr},\n` +
+    `  bpm: ${bpm},\n` +
+    `  music: [\n` +
+    musicGrid.map((row, i) => `    ${fmtRow(row)}, // ${pitches[i]}`).join("\n") + "\n" +
+    `  ],\n` +
+    `  extras: [\n` +
+    extrasGrid.map((row, i) => `    ${fmtRow(row)}, // ${pitches[i]}`).join("\n") + "\n" +
+    `  ],\n` +
+    `};\n\n` +
+    `export default puzzle;\n`;
 
   exportOutput.style.display = "block";
   exportOutput.textContent =
-    `// ${title}\n` +
-    `// ${pitches.length} pitches × ${steps} steps, ${filledCount} notes\n` +
+    `// Paste this into src/puzzles/${id}.ts\n` +
+    `// Then add to src/puzzles/index.ts:\n` +
+    `//   import ${id.replace(/-/g, "_")} from "./${id}";\n` +
+    `//   export const PUZZLES = [..., ${id.replace(/-/g, "_")}];\n\n` +
+    `// ${pitches.length} pitches × ${steps} steps · ${musicCount} music + ${extrasCount} extras\n` +
     `// Row clues: ${rowClues.map((c) => `[${c.join(",")}]`).join(", ")}\n` +
     `// Col clues: ${colClues.map((c) => `[${c.join(",")}]`).join(", ")}\n\n` +
-    tsCode +
-    `\n\n// Shareable URL:\n// ${shareUrl}`;
+    tsCode;
 
-  status.textContent = `Exported: ${pitches.length} pitches × ${steps} steps, ${filledCount} notes`;
+  status.textContent = `Exported: ${pitches.length} pitches × ${steps} steps, ${musicCount} music, ${extrasCount} extras`;
 });
 
 function sleep(ms: number): Promise<void> {
