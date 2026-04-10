@@ -578,8 +578,20 @@ document.getElementById("btn-loop")!.addEventListener("click", () => { looping ?
 document.getElementById("btn-stop")!.addEventListener("click", stopPlayback);
 document.getElementById("btn-clear")!.addEventListener("click", () => {
   stopPlayback();
+  // Reset everything to defaults
+  steps = 32;
+  bpm = 120;
+  title = "My Beat";
   displayPitches = [...ALL_PITCHES];
   grid = displayPitches.map(() => Array(steps).fill(false));
+  // Reset UI controls
+  (document.getElementById("cfg-steps") as HTMLInputElement).value = "32";
+  (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
+  (document.getElementById("cfg-title") as HTMLInputElement).value = "My Beat";
+  // Clear status and export
+  status.textContent = "";
+  exportOutput.style.display = "none";
+  exportOutput.textContent = "";
   renderRoll();
 });
 
