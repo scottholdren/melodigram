@@ -863,12 +863,47 @@ function renderTestPlay() {
 
   const maxColClueLen = Math.max(...colClues.map((c) => c.length || 1));
 
-  // Back button
+  // Toolbar
+  const toolbar = document.createElement("div");
+  toolbar.style.display = "flex";
+  toolbar.style.gap = "0.5rem";
+  toolbar.style.marginBottom = "0.5rem";
+  toolbar.style.alignItems = "center";
+
   const backBtn = document.createElement("button");
   backBtn.textContent = "← Back to edit";
-  backBtn.style.marginBottom = "0.5rem";
   backBtn.addEventListener("click", exitTestPlay);
-  playContainer.appendChild(backBtn);
+  toolbar.appendChild(backBtn);
+
+  const autoBtn = document.createElement("button");
+  autoBtn.textContent = "Auto-solve (step by step)";
+  autoBtn.className = "primary";
+  autoBtn.addEventListener("click", () => autoSolve(autoBtn));
+  toolbar.appendChild(autoBtn);
+
+  const speedLabel = document.createElement("label");
+  speedLabel.style.fontSize = "0.7rem";
+  speedLabel.style.color = "#666";
+  speedLabel.textContent = "Speed:";
+  toolbar.appendChild(speedLabel);
+
+  const speedSlider = document.createElement("input");
+  speedSlider.type = "range";
+  speedSlider.id = "auto-speed";
+  speedSlider.min = "50";
+  speedSlider.max = "1000";
+  speedSlider.value = "300";
+  speedSlider.style.width = "80px";
+  toolbar.appendChild(speedSlider);
+
+  const autoStatus = document.createElement("span");
+  autoStatus.id = "auto-status";
+  autoStatus.style.fontSize = "0.7rem";
+  autoStatus.style.color = "#888";
+  autoStatus.style.marginLeft = "0.5rem";
+  toolbar.appendChild(autoStatus);
+
+  playContainer.appendChild(toolbar);
 
   const table = document.createElement("div");
   table.className = "play-table";
@@ -993,6 +1028,242 @@ function checkTestPlaySolved(): boolean {
     }
   }
   return true;
+}
+
+// --- Visual auto-solver ---
+// Runs the line solver one deduction at a time with visual feedback.
+// Highlights the line being analyzed, fills cells it determines, pauses, repeats.
+let autoSolving = false;
+
+async function autoSolve(btn: HTMLButtonElement) {
+  if (autoSolving) {
+    autoSolving = false;
+    btn.textContent = "Auto-solve (step by step)";
+    return;
+  }
+  autoSolving = true;
+  btn.textContent = "Stop";
+  const statusSpan = document.getElementById("auto-status")!;
+
+  const rows = testPlayPitches.length;
+  const cols = steps;
+
+  // Compute clues from combined pattern
+  const rowClues = testPlayCombined.map((row) => computeCluesLocal(row));
+  const colClues: number[][] = [];
+  for (let c = 0; c < cols; c++) {
+    colClues.push(computeCluesLocal(testPlayCombined.map((row) => row[c])));
+  }
+
+  // Working state: 0 = unknown, 1 = filled, -1 = marked empty
+  const state: number[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
+  // Pre-fill from any existing test play state
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (testPlayGrid[r][c] === "filled") state[r][c] = 1;
+      else if (testPlayGrid[r][c] === "marked") state[r][c] = -1;
+    }
+  }
+
+  // Placements per row and column
+  function genPlacements(clues: number[], len: number): boolean[][] {
+    const out: boolean[][] = [];
+    function place(ci: number, pos: number, cur: boolean[]) {
+      if (ci === clues.length) {
+        const line = [...cur];
+        while (line.length < len) line.push(false);
+        out.push(line);
+        return;
+      }
+      const cl = clues[ci];
+      const rem = clues.slice(ci + 1).reduce((a, b) => a + b + 1, 0);
+      const mx = len - cl - rem;
+      for (let s = pos; s <= mx; s++) {
+        const line = [...cur];
+        while (line.length < s) line.push(false);
+        for (let i = 0; i < cl; i++) line.push(true);
+        if (ci < clues.length - 1) line.push(false);
+        place(ci + 1, line.length, line);
+      }
+    }
+    if (!clues.length) out.push(Array(len).fill(false));
+    else place(0, 0, []);
+    return out;
+  }
+
+  const rowPlacements = rowClues.map((c) => genPlacements(c, cols));
+  const colPlacements = colClues.map((c) => genPlacements(c, rows));
+
+  function filterLine(placements: boolean[][], known: number[]): boolean[][] {
+    return placements.filter((p) =>
+      p.every((v, i) => known[i] === 0 || v === (known[i] === 1))
+    );
+  }
+
+  function deduceLine(placements: boolean[][], len: number): number[] {
+    const result = Array(len).fill(0);
+    if (placements.length === 0) return result;
+    for (let i = 0; i < len; i++) {
+      const allFilled = placements.every((p) => p[i]);
+      const allEmpty = placements.every((p) => !p[i]);
+      if (allFilled) result[i] = 1;
+      else if (allEmpty) result[i] = -1;
+    }
+    return result;
+  }
+
+  function highlightLine(type: "row" | "col", idx: number, on: boolean) {
+    if (type === "row") {
+      for (let c = 0; c < cols; c++) {
+        const cell = testPlayCells[idx]?.[c];
+        if (cell) cell.classList.toggle("auto-highlight", on);
+      }
+    } else {
+      for (let r = 0; r < rows; r++) {
+        const cell = testPlayCells[r]?.[idx];
+        if (cell) cell.classList.toggle("auto-highlight", on);
+      }
+    }
+  }
+
+  function applyToCell(r: number, c: number, val: 1 | -1) {
+    const cell = testPlayCells[r]?.[c];
+    if (!cell) return;
+    if (val === 1) {
+      testPlayGrid[r][c] = "filled";
+      cell.classList.remove("play-marked");
+      cell.classList.add("play-filled", "auto-new");
+      cell.textContent = "";
+      cell.style.backgroundColor = "#5566ff";
+      cell.style.boxShadow = "0 0 10px #5566ff88";
+      setTimeout(() => cell.classList.remove("auto-new"), 400);
+    } else {
+      testPlayGrid[r][c] = "marked";
+      cell.classList.remove("play-filled");
+      cell.classList.add("play-marked", "auto-new");
+      cell.style.backgroundColor = "";
+      cell.style.boxShadow = "";
+      cell.textContent = "·";
+      setTimeout(() => cell.classList.remove("auto-new"), 400);
+    }
+  }
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const getDelay = () => {
+    const slider = document.getElementById("auto-speed") as HTMLInputElement;
+    return parseInt(slider?.value || "300");
+  };
+
+  let changed = true;
+  let iter = 0;
+  let totalDeductions = 0;
+
+  while (changed && iter < 100 && autoSolving) {
+    changed = false;
+    iter++;
+
+    // Rows
+    for (let r = 0; r < rows && autoSolving; r++) {
+      const valid = filterLine(rowPlacements[r], state[r]);
+      rowPlacements[r] = valid;
+      if (valid.length === 0) {
+        statusSpan.textContent = `CONTRADICTION in row ${testPlayPitches[r]}`;
+        autoSolving = false;
+        btn.textContent = "Auto-solve (step by step)";
+        return;
+      }
+      const deduced = deduceLine(valid, cols);
+      const newCells: { c: number; v: 1 | -1 }[] = [];
+      for (let c = 0; c < cols; c++) {
+        if (state[r][c] === 0 && deduced[c] !== 0) {
+          newCells.push({ c, v: deduced[c] as 1 | -1 });
+        }
+      }
+      if (newCells.length > 0) {
+        statusSpan.textContent = `Row ${testPlayPitches[r]} [${rowClues[r].join(",")}] → ${newCells.length} cell${newCells.length > 1 ? "s" : ""}`;
+        highlightLine("row", r, true);
+        await sleep(getDelay());
+        for (const { c, v } of newCells) {
+          state[r][c] = v;
+          applyToCell(r, c, v);
+          totalDeductions++;
+        }
+        await sleep(getDelay());
+        highlightLine("row", r, false);
+        changed = true;
+        if (!autoSolving) break;
+      }
+    }
+
+    if (!autoSolving) break;
+
+    // Columns
+    for (let c = 0; c < cols && autoSolving; c++) {
+      const known: number[] = [];
+      for (let r = 0; r < rows; r++) known.push(state[r][c]);
+      const valid = filterLine(colPlacements[c], known);
+      colPlacements[c] = valid;
+      if (valid.length === 0) {
+        statusSpan.textContent = `CONTRADICTION in column ${c + 1}`;
+        autoSolving = false;
+        btn.textContent = "Auto-solve (step by step)";
+        return;
+      }
+      const deduced = deduceLine(valid, rows);
+      const newCells: { r: number; v: 1 | -1 }[] = [];
+      for (let r = 0; r < rows; r++) {
+        if (state[r][c] === 0 && deduced[r] !== 0) {
+          newCells.push({ r, v: deduced[r] as 1 | -1 });
+        }
+      }
+      if (newCells.length > 0) {
+        statusSpan.textContent = `Col ${c + 1} [${colClues[c].join(",")}] → ${newCells.length} cell${newCells.length > 1 ? "s" : ""}`;
+        highlightLine("col", c, true);
+        await sleep(getDelay());
+        for (const { r, v } of newCells) {
+          state[r][c] = v;
+          applyToCell(r, c, v);
+          totalDeductions++;
+        }
+        await sleep(getDelay());
+        highlightLine("col", c, false);
+        changed = true;
+        if (!autoSolving) break;
+      }
+    }
+  }
+
+  // Check final state
+  let unknowns = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (state[r][c] === 0) unknowns++;
+    }
+  }
+
+  if (unknowns === 0) {
+    statusSpan.textContent = `Solved! ${totalDeductions} deductions in ${iter} passes.`;
+    if (checkTestPlaySolved()) {
+      testPlaySolved = true;
+      revealSolution();
+      playTestPlayMelody();
+    }
+  } else {
+    statusSpan.textContent = `Stuck — ${unknowns} cells need look-ahead (${totalDeductions} deductions, ${iter} passes)`;
+  }
+
+  autoSolving = false;
+  btn.textContent = "Auto-solve (step by step)";
+}
+
+function computeCluesLocal(line: boolean[]): number[] {
+  const clues: number[] = [];
+  let run = 0;
+  for (const cell of line) {
+    if (cell) { run++; } else if (run > 0) { clues.push(run); run = 0; }
+  }
+  if (run > 0) clues.push(run);
+  return clues;
 }
 
 function revealSolution() {
