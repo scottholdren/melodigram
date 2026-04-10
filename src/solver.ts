@@ -406,9 +406,11 @@ export async function checkSolvability(
  *
  * difficulty: 0 (easy, many givens) to 1 (hard, minimum givens)
  *
- * Strategy: run solver, find unsolved cells, reveal one from the most
- * constrained (most ambiguous) line, repeat. Lower difficulty reveals
- * extra cells beyond the minimum needed.
+ * Strategy: only reveal FILLED (note) cells, never empties.
+ * Prioritize reveals that unlock the most deductions:
+ * - A note revealed in a [1] line instantly solves the whole line
+ * - A note in a line with few short clues is more valuable than
+ *   one in a dense line that's already mostly constrained
  *
  * Returns the set of cells that must be pre-filled as givens.
  */
@@ -426,78 +428,114 @@ export async function makePlayable(
     colClues.push(computeClues(solution.map((row) => row[c])));
   }
 
+  // Pre-compute: for each line, how many filled cells does it have?
+  // Lines with fewer filled cells benefit most from a single reveal.
+  const rowNoteCounts = rowClues.map((clue) => clue.reduce((a, b) => a + b, 0));
+  const colNoteCounts = colClues.map((clue) => clue.reduce((a, b) => a + b, 0));
+
   const givens: [number, number][] = [];
   const givenSet = new Set<string>();
   let round = 0;
-  const maxRounds = rows * cols; // safety cap
+  const maxRounds = rows * cols;
 
   while (round < maxRounds) {
     round++;
-    onProgress?.(`Round ${round}: ${givens.length} givens so far, solving...`);
+    onProgress?.(`Round ${round}: ${givens.length} givens, solving...`);
     await yieldUI();
 
-    // Build a grid with current givens pre-filled
     const result = await solveWithGivens(rows, cols, rowClues, colClues, solution, givenSet);
 
     if (result.solved) {
-      // Puzzle is solvable! On easy difficulty, add some bonus givens
-      // to make it even more accessible
+      // On easy difficulty, add bonus note reveals spread across the grid
       if (difficulty < 0.5) {
-        const bonusCount = Math.floor((1 - difficulty) * rows * 0.5);
-        const filledCells: [number, number][] = [];
+        const bonusCount = Math.floor((1 - difficulty) * rows * 0.3);
+        const candidates: [number, number][] = [];
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
             if (solution[r][c] && !givenSet.has(`${r},${c}`)) {
-              filledCells.push([r, c]);
+              candidates.push([r, c]);
             }
           }
         }
-        // Shuffle and take bonus
-        for (let i = filledCells.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [filledCells[i], filledCells[j]] = [filledCells[j], filledCells[i]];
+        // Spread bonus evenly: pick from different rows
+        const byRow = new Map<number, [number, number][]>();
+        for (const [r, c] of candidates) {
+          if (!byRow.has(r)) byRow.set(r, []);
+          byRow.get(r)!.push([r, c]);
         }
-        const bonus = filledCells.slice(0, Math.min(bonusCount, filledCells.length));
-        for (const [r, c] of bonus) {
-          givens.push([r, c]);
-          givenSet.add(`${r},${c}`);
+        let added = 0;
+        const rowKeys = [...byRow.keys()];
+        let ri = 0;
+        while (added < bonusCount && added < candidates.length) {
+          const row = rowKeys[ri % rowKeys.length];
+          const cells = byRow.get(row)!;
+          if (cells.length > 0) {
+            const pick = cells.splice(Math.floor(Math.random() * cells.length), 1)[0];
+            givens.push(pick);
+            givenSet.add(`${pick[0]},${pick[1]}`);
+            added++;
+          }
+          ri++;
+          if (ri > candidates.length + rowKeys.length) break; // safety
         }
       }
       break;
     }
 
-    // Find the best cell to reveal as a given.
-    // Strategy: pick an unsolved cell in the most ambiguous line.
-    // This forces the solver to make progress on the hardest part.
-    const unsolved: { r: number; c: number; score: number }[] = [];
+    // Find the best NOTE cell to reveal.
+    // Only consider filled cells (solution[r][c] === true) that are unsolved.
+    // Score each by how much information it provides:
+    // - Revealing a note in a line with fewer total notes = higher value
+    //   (e.g. revealing the one note in a [1] line solves it completely)
+    // - Prefer cells at the intersection of two unsolved lines
+    const candidates: { r: number; c: number; score: number }[] = [];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        if (result.grid[r][c] === 0 && !givenSet.has(`${r},${c}`)) {
-          // Score: prefer cells that are at the intersection of two ambiguous lines
-          const rowProb = result.problematic.find((p) => p.type === "row" && p.index === r);
-          const colProb = result.problematic.find((p) => p.type === "col" && p.index === c);
-          const rowScore = rowProb ? rowProb.possiblePlacements : 1;
-          const colScore = colProb ? colProb.possiblePlacements : 1;
-          unsolved.push({ r, c, score: rowScore + colScore });
-        }
+        // Only reveal actual notes, never empties
+        if (!solution[r][c]) continue;
+        if (result.grid[r][c] !== 0) continue; // already determined
+        if (givenSet.has(`${r},${c}`)) continue;
+
+        const rowProb = result.problematic.find((p) => p.type === "row" && p.index === r);
+        const colProb = result.problematic.find((p) => p.type === "col" && p.index === c);
+
+        if (!rowProb && !colProb) continue; // both lines already solved
+
+        // Score: inverse of note count (fewer notes = more info per reveal)
+        // A [1] line with 1 note: revealing it solves the whole line = high score
+        // A [4,3,2] line with 9 notes: revealing one helps less = low score
+        const rowInfoGain = rowProb ? (1 / Math.max(1, rowNoteCounts[r])) * rowProb.unknownCells : 0;
+        const colInfoGain = colProb ? (1 / Math.max(1, colNoteCounts[c])) * colProb.unknownCells : 0;
+        const score = rowInfoGain + colInfoGain;
+
+        candidates.push({ r, c, score });
       }
     }
 
-    if (unsolved.length === 0) break; // nothing left to reveal
-
-    // Pick the cell with the highest ambiguity score
-    unsolved.sort((a, b) => b.score - a.score);
-
-    // On harder difficulty, reveal fewer cells per round (just the top one)
-    // On easier difficulty, reveal a batch
-    const batchSize = difficulty > 0.7 ? 1 : difficulty > 0.3 ? 3 : 5;
-    const toReveal = unsolved.slice(0, Math.min(batchSize, unsolved.length));
-
-    for (const { r, c } of toReveal) {
-      givens.push([r, c]);
-      givenSet.add(`${r},${c}`);
+    if (candidates.length === 0) {
+      // No more notes to reveal — remaining unknowns are all empty cells.
+      // Reveal one empty cell to break the tie.
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (result.grid[r][c] === 0 && !givenSet.has(`${r},${c}`)) {
+            givens.push([r, c]);
+            givenSet.add(`${r},${c}`);
+            break;
+          }
+        }
+        if (givens.length > round * 2) break; // safety
+      }
+      continue;
     }
+
+    // Sort: highest info gain first
+    candidates.sort((a, b) => b.score - a.score);
+
+    // Reveal 1 cell per round (precise, avoids over-revealing)
+    const best = candidates[0];
+    givens.push([best.r, best.c]);
+    givenSet.add(`${best.r},${best.c}`);
   }
 
   onProgress?.(`Done: ${givens.length} givens needed`);
