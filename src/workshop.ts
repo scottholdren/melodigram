@@ -198,7 +198,8 @@ controls.innerHTML = `
   <button id="btn-stop">&#9632; Stop</button>
   <button id="btn-clear">Clear</button>
   <button id="btn-trim">Trim empty rows</button>
-  <button id="btn-del-bar">Delete last bar</button>
+  <button id="btn-del-first">Delete first bar</button>
+  <button id="btn-del-last">Delete last bar</button>
   <button id="btn-check">Check solvability</button>
   <button id="btn-export" class="primary">Export puzzle</button>
 `;
@@ -617,7 +618,20 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
   status.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""} — ${displayPitches.length} rows remaining. Clear to restore full keyboard.`;
 });
 
-document.getElementById("btn-del-bar")!.addEventListener("click", () => {
+document.getElementById("btn-del-first")!.addEventListener("click", () => {
+  if (isPlaying) return;
+  if (steps <= 4) {
+    status.textContent = "Already at minimum (4 steps / 1 bar)";
+    return;
+  }
+  steps -= 4;
+  grid = grid.map((row) => row.slice(4));
+  (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
+  renderRoll();
+  status.textContent = `Removed first bar — now ${steps} steps (${steps / 4} bar${steps / 4 !== 1 ? "s" : ""})`;
+});
+
+document.getElementById("btn-del-last")!.addEventListener("click", () => {
   if (isPlaying) return;
   if (steps <= 4) {
     status.textContent = "Already at minimum (4 steps / 1 bar)";
