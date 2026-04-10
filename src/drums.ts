@@ -1,7 +1,7 @@
 import * as Tone from "tone";
 import { Midi } from "@tonejs/midi";
 import { ALL_SOUNDS } from "./drum-sounds";
-import { checkSolvability } from "./solver";
+import { checkSolvability, makePlayable } from "./solver";
 
 // Default track assignments (mix of both kits)
 const DEFAULT_SOUNDS = [
@@ -85,7 +85,14 @@ controls.innerHTML = `
   <button id="btn-clear">Clear</button>
   <button id="btn-trim">Trim empty</button>
   <button id="btn-check">Check solvability</button>
+  <button id="btn-make-solvable" class="primary">Make solvable</button>
   <button id="btn-export" class="primary">Export</button>
+</span>
+<div class="config-inline" id="difficulty-wrap" style="display:none;gap:0.5rem;align-items:center;margin-top:0.3rem">
+  <label style="font-size:0.6rem;color:#555;text-transform:uppercase">Difficulty</label>
+  <input type="range" id="cfg-difficulty" min="0" max="100" value="50" style="width:120px;accent-color:#5566ff">
+  <span id="diff-label" style="font-size:0.7rem;color:#666">Medium</span>
+</div>
 `;
 app.appendChild(controls);
 
@@ -436,6 +443,65 @@ document.getElementById("btn-check")!.addEventListener("click", async () => {
 
   exportOutput.textContent = report;
   statusEl.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
+  document.getElementById("difficulty-wrap")!.style.display = report.startsWith("SOLVABLE") ? "none" : "flex";
+});
+
+document.getElementById("cfg-difficulty")!.addEventListener("input", (e) => {
+  const val = parseInt((e.target as HTMLInputElement).value);
+  const labels = ["Easy", "Easy", "Medium", "Hard", "Expert"];
+  document.getElementById("diff-label")!.textContent = labels[Math.floor(val / 25)] || "Medium";
+});
+
+document.getElementById("btn-make-solvable")!.addEventListener("click", async () => {
+  const usedRows: number[] = [];
+  for (let r = 0; r < grid.length; r++) {
+    if (grid[r]?.some(Boolean)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    statusEl.textContent = "Place some hits first!";
+    return;
+  }
+
+  const solution = usedRows.map((i) => grid[i].slice(0, steps));
+  const difficulty = parseInt((document.getElementById("cfg-difficulty") as HTMLInputElement).value) / 100;
+
+  exportOutput.style.display = "block";
+  exportOutput.textContent = "Finding minimum givens...";
+  statusEl.textContent = "Making puzzle solvable...";
+
+  const { givens, iterations } = await makePlayable(solution, difficulty, (msg) => {
+    exportOutput.textContent = msg;
+  });
+
+  const filledCells = solution.flat().filter(Boolean).length;
+  const givenPct = Math.round((givens.length / filledCells) * 100);
+
+  let report = `SOLVABLE with ${givens.length} given cells (${givenPct}% of ${filledCells} hits revealed).\n`;
+  report += `Difficulty: ${difficulty < 0.3 ? "Easy" : difficulty < 0.7 ? "Medium" : "Hard"}\n`;
+  report += `Found in ${iterations} rounds.\n\n`;
+
+  const byRow = new Map<number, number[]>();
+  for (const [r, c] of givens) {
+    if (!byRow.has(r)) byRow.set(r, []);
+    byRow.get(r)!.push(c);
+  }
+  report += `Given cells:\n`;
+  for (const [r, cols] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
+    const label = ALL_SOUNDS[trackSounds[usedRows[r]]].name;
+    report += `  ${label}: beats ${cols.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
+  }
+
+  // Highlight givens
+  for (const [solR, solC] of givens) {
+    const gridR = usedRows[solR];
+    if (cellEls[gridR]?.[solC]) {
+      cellEls[gridR][solC].style.outline = "2px solid #ffaa00";
+      cellEls[gridR][solC].style.outlineOffset = "-2px";
+    }
+  }
+
+  exportOutput.textContent = report;
+  statusEl.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange)`;
 });
 
 // --- Export ---

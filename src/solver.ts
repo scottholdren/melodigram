@@ -400,3 +400,182 @@ export async function checkSolvability(
 
   return { result, report };
 }
+
+/**
+ * Make a puzzle playable by iteratively adding "given" cells until solvable.
+ *
+ * difficulty: 0 (easy, many givens) to 1 (hard, minimum givens)
+ *
+ * Strategy: run solver, find unsolved cells, reveal one from the most
+ * constrained (most ambiguous) line, repeat. Lower difficulty reveals
+ * extra cells beyond the minimum needed.
+ *
+ * Returns the set of cells that must be pre-filled as givens.
+ */
+export async function makePlayable(
+  solution: boolean[][],
+  difficulty: number, // 0..1
+  onProgress?: ProgressCallback
+): Promise<{ givens: [number, number][]; iterations: number }> {
+  const rows = solution.length;
+  const cols = solution[0]?.length || 0;
+
+  const rowClues = solution.map((row) => computeClues(row));
+  const colClues: number[][] = [];
+  for (let c = 0; c < cols; c++) {
+    colClues.push(computeClues(solution.map((row) => row[c])));
+  }
+
+  const givens: [number, number][] = [];
+  const givenSet = new Set<string>();
+  let round = 0;
+  const maxRounds = rows * cols; // safety cap
+
+  while (round < maxRounds) {
+    round++;
+    onProgress?.(`Round ${round}: ${givens.length} givens so far, solving...`);
+    await yieldUI();
+
+    // Build a grid with current givens pre-filled
+    const result = await solveWithGivens(rows, cols, rowClues, colClues, solution, givenSet);
+
+    if (result.solved) {
+      // Puzzle is solvable! On easy difficulty, add some bonus givens
+      // to make it even more accessible
+      if (difficulty < 0.5) {
+        const bonusCount = Math.floor((1 - difficulty) * rows * 0.5);
+        const filledCells: [number, number][] = [];
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            if (solution[r][c] && !givenSet.has(`${r},${c}`)) {
+              filledCells.push([r, c]);
+            }
+          }
+        }
+        // Shuffle and take bonus
+        for (let i = filledCells.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [filledCells[i], filledCells[j]] = [filledCells[j], filledCells[i]];
+        }
+        const bonus = filledCells.slice(0, Math.min(bonusCount, filledCells.length));
+        for (const [r, c] of bonus) {
+          givens.push([r, c]);
+          givenSet.add(`${r},${c}`);
+        }
+      }
+      break;
+    }
+
+    // Find the best cell to reveal as a given.
+    // Strategy: pick an unsolved cell in the most ambiguous line.
+    // This forces the solver to make progress on the hardest part.
+    const unsolved: { r: number; c: number; score: number }[] = [];
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (result.grid[r][c] === 0 && !givenSet.has(`${r},${c}`)) {
+          // Score: prefer cells that are at the intersection of two ambiguous lines
+          const rowProb = result.problematic.find((p) => p.type === "row" && p.index === r);
+          const colProb = result.problematic.find((p) => p.type === "col" && p.index === c);
+          const rowScore = rowProb ? rowProb.possiblePlacements : 1;
+          const colScore = colProb ? colProb.possiblePlacements : 1;
+          unsolved.push({ r, c, score: rowScore + colScore });
+        }
+      }
+    }
+
+    if (unsolved.length === 0) break; // nothing left to reveal
+
+    // Pick the cell with the highest ambiguity score
+    unsolved.sort((a, b) => b.score - a.score);
+
+    // On harder difficulty, reveal fewer cells per round (just the top one)
+    // On easier difficulty, reveal a batch
+    const batchSize = difficulty > 0.7 ? 1 : difficulty > 0.3 ? 3 : 5;
+    const toReveal = unsolved.slice(0, Math.min(batchSize, unsolved.length));
+
+    for (const { r, c } of toReveal) {
+      givens.push([r, c]);
+      givenSet.add(`${r},${c}`);
+    }
+  }
+
+  onProgress?.(`Done: ${givens.length} givens needed`);
+  return { givens, iterations: round };
+}
+
+async function solveWithGivens(
+  rows: number, cols: number,
+  rowClues: number[][], colClues: number[][],
+  solution: boolean[][],
+  givenSet: Set<string>
+): Promise<SolverResult> {
+  const grid: Cell[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
+
+  // Pre-fill givens
+  for (const key of givenSet) {
+    const [r, c] = key.split(",").map(Number);
+    grid[r][c] = solution[r][c] ? 1 : -1;
+  }
+
+  const rowData = rowClues.map((clue) => generatePlacements(clue, cols));
+  const colData = colClues.map((clue) => generatePlacements(clue, rows));
+
+  let changed = true;
+  let iterations = 0;
+  const maxIterations = 100;
+  let contradiction = false;
+
+  while (changed && iterations < maxIterations) {
+    changed = false;
+    iterations++;
+
+    for (let r = 0; r < rows; r++) {
+      const known = grid[r];
+      const valid = filterPlacements(rowData[r].placements, known);
+      rowData[r].placements = valid;
+      if (valid.length === 0 && !rowData[r].capped) { contradiction = true; break; }
+      const deduced = deduceLine(valid, cols);
+      for (let c = 0; c < cols; c++) {
+        if (grid[r][c] === 0 && deduced[c] !== 0) { grid[r][c] = deduced[c]; changed = true; }
+      }
+    }
+    if (contradiction) break;
+
+    for (let c = 0; c < cols; c++) {
+      const known: Cell[] = [];
+      for (let r = 0; r < rows; r++) known.push(grid[r][c]);
+      const valid = filterPlacements(colData[c].placements, known);
+      colData[c].placements = valid;
+      if (valid.length === 0 && !colData[c].capped) { contradiction = true; break; }
+      const deduced = deduceLine(valid, rows);
+      for (let r = 0; r < rows; r++) {
+        if (grid[r][c] === 0 && deduced[r] !== 0) { grid[r][c] = deduced[r]; changed = true; }
+      }
+    }
+    if (contradiction) break;
+  }
+
+  const totalCells = rows * cols;
+  const solvedCells = countSolved(grid, rows, cols);
+
+  const problematic: LineDiag[] = [];
+  for (let r = 0; r < rows; r++) {
+    const unknowns = grid[r].filter((c) => c === 0).length;
+    if (unknowns > 0) {
+      problematic.push({ index: r, type: "row", clue: rowClues[r],
+        possiblePlacements: rowData[r].placements.length, unknownCells: unknowns, capped: rowData[r].capped });
+    }
+  }
+  for (let c = 0; c < cols; c++) {
+    let unknowns = 0;
+    for (let r = 0; r < rows; r++) { if (grid[r][c] === 0) unknowns++; }
+    if (unknowns > 0) {
+      problematic.push({ index: c, type: "col", clue: colClues[c],
+        possiblePlacements: colData[c].placements.length, unknownCells: unknowns, capped: colData[c].capped });
+    }
+  }
+  problematic.sort((a, b) => b.possiblePlacements - a.possiblePlacements);
+
+  return { solved: solvedCells === totalCells && !contradiction, grid, iterations, totalCells, solvedCells, problematic, contradiction };
+}

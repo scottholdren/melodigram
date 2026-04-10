@@ -1,7 +1,7 @@
 import * as Tone from "tone";
 import { loadPiano, ensureAudio, isSamplerReady } from "./audio";
 import { importFile, type ImportResult } from "./importers";
-import { checkSolvability } from "./solver";
+import { checkSolvability, makePlayable } from "./solver";
 
 // --- Constants ---
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -201,7 +201,14 @@ controls.innerHTML = `
   <button id="btn-del-first">Delete first bar</button>
   <button id="btn-del-last">Delete last bar</button>
   <button id="btn-check">Check solvability</button>
+  <button id="btn-make-solvable" class="primary">Make solvable</button>
   <button id="btn-export" class="primary">Export puzzle</button>
+</span>
+<div class="config-inline" id="difficulty-wrap" style="display:none">
+  <label style="font-size:0.6rem;color:#555;text-transform:uppercase">Difficulty</label>
+  <input type="range" id="cfg-difficulty" min="0" max="100" value="50" style="width:120px;accent-color:#5566ff">
+  <span id="diff-label" style="font-size:0.7rem;color:#666">Medium</span>
+</div>
 `;
 app.appendChild(controls);
 
@@ -669,6 +676,78 @@ document.getElementById("btn-check")!.addEventListener("click", async () => {
 
   exportOutput.textContent = report;
   status.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
+
+  // Show difficulty slider if not solvable
+  document.getElementById("difficulty-wrap")!.style.display = report.startsWith("SOLVABLE") ? "none" : "flex";
+});
+
+// Difficulty slider label
+document.getElementById("cfg-difficulty")!.addEventListener("input", (e) => {
+  const val = parseInt((e.target as HTMLInputElement).value);
+  const labels = ["Easy", "Easy", "Medium", "Hard", "Expert"];
+  document.getElementById("diff-label")!.textContent = labels[Math.floor(val / 25)] || "Medium";
+});
+
+// --- Make solvable ---
+let lastGivens: [number, number][] = [];
+let lastGivenUsedRows: number[] = [];
+
+document.getElementById("btn-make-solvable")!.addEventListener("click", async () => {
+  const usedRows: number[] = [];
+  for (let r = 0; r < displayPitches.length; r++) {
+    if (grid[r]?.some(Boolean)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    status.textContent = "Place some notes first!";
+    return;
+  }
+
+  const solution = usedRows.map((i) => grid[i].slice(0, steps));
+  const difficulty = parseInt((document.getElementById("cfg-difficulty") as HTMLInputElement).value) / 100;
+
+  exportOutput.style.display = "block";
+  exportOutput.textContent = "Finding minimum givens...";
+  status.textContent = "Making puzzle solvable...";
+
+  const { givens, iterations } = await makePlayable(solution, difficulty, (msg) => {
+    exportOutput.textContent = msg;
+  });
+
+  lastGivens = givens;
+  lastGivenUsedRows = usedRows;
+
+  const totalCells = solution.flat().length;
+  const filledCells = solution.flat().filter(Boolean).length;
+  const givenPct = Math.round((givens.length / filledCells) * 100);
+
+  let report = `SOLVABLE with ${givens.length} given cells (${givenPct}% of ${filledCells} notes revealed).\n`;
+  report += `Difficulty: ${difficulty < 0.3 ? "Easy" : difficulty < 0.7 ? "Medium" : "Hard"}\n`;
+  report += `Found in ${iterations} rounds.\n\n`;
+  report += `Given cells (row, col):\n`;
+
+  // Show givens grouped by row
+  const byRow = new Map<number, number[]>();
+  for (const [r, c] of givens) {
+    if (!byRow.has(r)) byRow.set(r, []);
+    byRow.get(r)!.push(c);
+  }
+  for (const [r, cols] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
+    const label = displayPitches[usedRows[r]] || `Row ${r}`;
+    report += `  ${label}: steps ${cols.sort((a, b) => a - b).map((c) => c + 1).join(", ")}\n`;
+  }
+
+  // Highlight givens on the grid
+  for (const [solR, solC] of givens) {
+    const gridR = usedRows[solR];
+    if (seqCells[gridR]?.[solC]) {
+      const cell = seqCells[gridR][solC];
+      cell.style.outline = "2px solid #ffaa00";
+      cell.style.outlineOffset = "-2px";
+    }
+  }
+
+  exportOutput.textContent = report;
+  status.textContent = `Solvable! ${givens.length} given cells needed (highlighted in orange)`;
 });
 
 // --- Export ---
