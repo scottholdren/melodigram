@@ -75,6 +75,10 @@ const playBtn = document.createElement("button");
 playBtn.textContent = "Play";
 controls.appendChild(playBtn);
 
+const hearBtn = document.createElement("button");
+hearBtn.textContent = "Hear Solution";
+controls.appendChild(hearBtn);
+
 const clearBtn = document.createElement("button");
 clearBtn.textContent = "Clear";
 controls.appendChild(clearBtn);
@@ -217,7 +221,7 @@ function renderGrid() {
           isSolved = true;
           subtitle.textContent = currentPuzzle.revealTitle;
           hint.textContent = "Solved!";
-          await playMelody();
+          await playBack("solution");
         }
       });
 
@@ -246,18 +250,24 @@ function checkSolved(): boolean {
 }
 
 // --- Duration-aware playback ---
-async function playMelody(): Promise<void> {
+// source: "grid" plays user's fills, "solution" plays the answer
+async function playBack(source: "grid" | "solution"): Promise<void> {
   if (isPlaying) return;
   await ensureAudio(currentPuzzle.bpm);
   if (!isSamplerReady()) return;
 
   isPlaying = true;
   playBtn.disabled = true;
+  hearBtn.disabled = true;
   clearBtn.disabled = true;
 
   const PITCHES = currentPuzzle.pitches;
   const BEATS = currentPuzzle.solution[0].length;
   const secPerBeat = 60 / currentPuzzle.bpm;
+  const sol = currentPuzzle.solution;
+
+  const isFilled = (r: number, c: number): boolean =>
+    source === "solution" ? sol[r][c] : grid[r][c] === "filled";
 
   const transport = getTransport();
   transport.stop();
@@ -268,9 +278,9 @@ async function playMelody(): Promise<void> {
   for (let r = 0; r < PITCHES.length; r++) {
     let c = 0;
     while (c < BEATS) {
-      if (grid[r][c] === "filled") {
+      if (isFilled(r, c)) {
         let len = 1;
-        while (c + len < BEATS && grid[r][c + len] === "filled") len++;
+        while (c + len < BEATS && isFilled(r, c + len)) len++;
         scheduleNote(PITCHES[r], c * secPerBeat, len * secPerBeat * 0.9);
         c += len;
       } else {
@@ -286,7 +296,7 @@ async function playMelody(): Promise<void> {
     for (let row = 0; row < PITCHES.length; row++) {
       const cell = cells[row][col];
       cell.classList.add("active-col");
-      if (grid[row][col] === "filled") {
+      if (isFilled(row, col)) {
         cell.classList.add("playing");
         cell.style.boxShadow = `0 0 25px ${getNoteColor(PITCHES[row])}, 0 0 50px ${getNoteColor(PITCHES[row])}44`;
       }
@@ -297,8 +307,11 @@ async function playMelody(): Promise<void> {
     for (let row = 0; row < PITCHES.length; row++) {
       const cell = cells[row][col];
       cell.classList.remove("active-col", "playing");
+      // Restore glow only for user-filled cells
       if (grid[row][col] === "filled") {
         cell.style.boxShadow = `0 0 12px ${getNoteColor(PITCHES[row])}66`;
+      } else {
+        cell.style.boxShadow = "";
       }
     }
   }
@@ -307,10 +320,12 @@ async function playMelody(): Promise<void> {
   transport.cancel();
   isPlaying = false;
   playBtn.disabled = false;
+  hearBtn.disabled = false;
   clearBtn.disabled = false;
 }
 
-playBtn.addEventListener("click", () => playMelody());
+playBtn.addEventListener("click", () => playBack("grid"));
+hearBtn.addEventListener("click", () => playBack("solution"));
 
 clearBtn.addEventListener("click", () => {
   if (isPlaying) return;

@@ -7,6 +7,8 @@ export interface Puzzle {
   solution: boolean[][];
 }
 
+// Ode to Joy — melody: E E F G G F E D
+// Harmony: C major voicings (C3+G3+C4) under melody, clean intervals only
 export const ODE_TO_JOY: Puzzle = {
   id: "ode-to-joy",
   title: "Can you hear it?",
@@ -14,13 +16,14 @@ export const ODE_TO_JOY: Puzzle = {
   pitches: ["G4", "F4", "E4", "D4", "C4", "G3", "C3"],
   bpm: 92,
   solution: [
-    [ true, false, false,  true,  true, false,  true,  true], // G4
-    [false, false,  true, false, false,  true, false,  true], // F4
-    [ true,  true, false, false, false, false,  true, false], // E4
-    [false, false, false, false, false,  true, false,  true], // D4
-    [false, false, false,  true,  true,  true, false, false], // C4
-    [ true,  true, false,  true,  true, false,  true,  true], // G3
-    [ true, false, false,  true, false,  true, false,  true], // C3
+    //  1      2      3      4      5      6      7      8
+    [false, false, false,  true,  true, false, false, false], // G4: melody beats 4-5
+    [false, false,  true, false, false,  true, false, false], // F4: melody beats 3,6
+    [ true,  true, false, false, false, false,  true, false], // E4: melody beats 1-2,7
+    [false, false, false, false, false, false, false,  true], // D4: melody beat 8
+    [ true,  true, false,  true,  true, false,  true, false], // C4: harmony
+    [ true,  true,  true, false, false,  true,  true,  true], // G3: harmony
+    [ true,  true, false,  true,  true, false,  true,  true], // C3: bass
   ],
 };
 
