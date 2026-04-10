@@ -6,7 +6,7 @@ let audioStarted = false;
 let ready = false;
 let useFallback = false;
 
-const SAMPLE_BASE = "https://tonejs.github.io/audio/salamander/";
+const SAMPLE_BASE = import.meta.env.BASE_URL + "samples/piano/";
 
 const SAMPLE_MAP: Record<string, string> = {
   C3: "C3.mp3",
