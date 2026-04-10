@@ -119,22 +119,9 @@ const INSTRUMENTS: Instrument[] = [
 let displayPitches: string[] = [...ALL_PITCHES];
 let steps = 32;
 let bpm = 120;
-type QuantizeValue = "4n" | "8n" | "16n" | "32n";
-let quantize: QuantizeValue = "16n";
-function quantizeDivisor(q: QuantizeValue): number {
-  return q === "4n" ? 1 : q === "8n" ? 2 : q === "16n" ? 4 : 8;
-}
+let quantize: "4n" | "8n" | "16n" = "8n";
 let title = "My Beat";
 let grid: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
-// attacks[r][c] = true means a new note starts at this cell. Parallel to grid.
-// Without this we'd merge adjacent same-row cells into one held note, losing trills.
-let attacks: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
-
-function freshGrid(rows: number, cols: number) {
-  grid = Array.from({ length: rows }, () => Array(cols).fill(false));
-  attacks = Array.from({ length: rows }, () => Array(cols).fill(false));
-}
-
 let seqCells: HTMLDivElement[][] = [];
 let isPlaying = false;
 let looping = false;
@@ -174,9 +161,8 @@ config.innerHTML = `
     <label>Quantize</label>
     <select id="cfg-quantize">
       <option value="4n">1/4 note</option>
-      <option value="8n">1/8 note</option>
-      <option value="16n" selected>1/16 note</option>
-      <option value="32n">1/32 note</option>
+      <option value="8n" selected>1/8 note</option>
+      <option value="16n">1/16 note</option>
     </select>
   </div>
   <div class="config-group">
@@ -365,9 +351,7 @@ function renderRoll() {
       cell.addEventListener("click", async () => {
         await ensureAudio(bpm);
         if (!grid[ri]) grid[ri] = Array(steps).fill(false);
-        if (!attacks[ri]) attacks[ri] = Array(steps).fill(false);
         grid[ri][ci] = !grid[ri][ci];
-        attacks[ri][ci] = grid[ri][ci];
         if (grid[ri][ci]) {
           cell.classList.add("active", noteColorClass(displayPitches[ri]));
           triggerNote(displayPitches[ri]);
@@ -406,7 +390,7 @@ document.getElementById("cfg-apply")!.addEventListener("click", applyConfig);
 function applyConfig() {
   const stepsVal = parseInt((document.getElementById("cfg-steps") as HTMLInputElement).value) || 32;
   const bpmVal = parseInt((document.getElementById("cfg-bpm") as HTMLInputElement).value) || 120;
-  const quantVal = (document.getElementById("cfg-quantize") as HTMLSelectElement).value as QuantizeValue;
+  const quantVal = (document.getElementById("cfg-quantize") as HTMLSelectElement).value as "4n" | "8n" | "16n";
   const instVal = parseInt((document.getElementById("cfg-instrument") as HTMLSelectElement).value) || 0;
   title = (document.getElementById("cfg-title") as HTMLInputElement).value || "My Beat";
 
@@ -419,11 +403,6 @@ function applyConfig() {
   // Resize grid columns if steps changed
   if (steps !== oldSteps) {
     grid = grid.map((row) => {
-      const newRow = Array(steps).fill(false);
-      for (let c = 0; c < Math.min(row.length, steps); c++) newRow[c] = row[c];
-      return newRow;
-    });
-    attacks = attacks.map((row) => {
       const newRow = Array(steps).fill(false);
       for (let c = 0; c < Math.min(row.length, steps); c++) newRow[c] = row[c];
       return newRow;
@@ -456,34 +435,7 @@ function applyImport(result: ImportResult) {
     (document.getElementById("cfg-bpm") as HTMLInputElement).value = String(bpm);
   }
 
-  // Auto-detect quantize: scan onset gaps and pick the finest quantize
-  // where the step size is <= the smallest meaningful gap. Ignore gaps
-  // below 15ms (those are chord tones, not sequential notes).
-  if (result.notes.length > 1) {
-    const onsetTimes = result.notes.map((n) => n.time).sort((a, b) => a - b);
-    const gaps: number[] = [];
-    for (let i = 1; i < onsetTimes.length; i++) {
-      const gap = onsetTimes[i] - onsetTimes[i - 1];
-      if (gap > 0.015) gaps.push(gap);
-    }
-    if (gaps.length > 0) {
-      gaps.sort((a, b) => a - b);
-      // Use the 15th percentile so outlier fast runs don't force 1/32 everywhere
-      const pick = gaps[Math.floor(gaps.length * 0.15)];
-      const candidates: QuantizeValue[] = ["4n", "8n", "16n", "32n"];
-      let chosen: QuantizeValue = "16n";
-      for (const q of candidates) {
-        const sec = 60 / bpm / quantizeDivisor(q);
-        if (sec <= pick * 1.1) chosen = q;
-      }
-      // Never coarser than 16n for MIDI
-      if (chosen === "4n" || chosen === "8n") chosen = "16n";
-      quantize = chosen;
-      (document.getElementById("cfg-quantize") as HTMLSelectElement).value = chosen;
-    }
-  }
-
-  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
+  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
 
   // Auto-set steps from content
   const maxTime = Math.max(...result.notes.map((n) => n.time + n.duration));
@@ -493,9 +445,9 @@ function applyImport(result: ImportResult) {
 
   // Reset grid to full keyboard
   displayPitches = [...ALL_PITCHES];
-  freshGrid(displayPitches.length, steps);
+  grid = displayPitches.map(() => Array(steps).fill(false));
 
-  // Place notes with attack markers for trills and rapid repeats
+  // Place notes
   let placed = 0;
   for (const note of result.notes) {
     const pitchName = midiToNote(note.midi);
@@ -506,13 +458,8 @@ function applyImport(result: ImportResult) {
     const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
 
     for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
-      if (s >= 0) {
-        grid[rowIndex][s] = true;
-        placed++;
-      }
-    }
-    if (startStep >= 0 && startStep < steps) {
-      attacks[rowIndex][startStep] = true;
+      grid[rowIndex][s] = true;
+      placed++;
     }
   }
 
@@ -583,28 +530,21 @@ async function playOnce(): Promise<void> {
   if (usePiano && !isSamplerReady()) return;
 
   isPlaying = true;
-  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
+  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
 
   const transport = Tone.getTransport();
   transport.stop();
   transport.cancel();
   transport.position = 0;
 
-  // Schedule notes using attack markers. Each attack starts a new note
-  // that sustains until the next attack or an empty cell. Preserves trills
-  // and rapid repeats on the same pitch.
+  // Schedule notes with duration awareness
   for (let r = 0; r < displayPitches.length; r++) {
     if (!grid[r]) continue;
-    const rowAttacks = attacks[r] || [];
     let c = 0;
     while (c < steps) {
-      if (grid[r][c] && rowAttacks[c]) {
+      if (grid[r][c]) {
         let len = 1;
-        while (
-          c + len < steps &&
-          grid[r][c + len] &&
-          !rowAttacks[c + len]
-        ) len++;
+        while (c + len < steps && grid[r][c + len]) len++;
         const note = displayPitches[r];
         const startTime = c * secPerStep;
         const dur = len * secPerStep * 0.85;
@@ -683,14 +623,14 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   bpm = 120;
   title = "My Beat";
   displayPitches = [...ALL_PITCHES];
-  freshGrid(displayPitches.length, steps);
+  grid = displayPitches.map(() => Array(steps).fill(false));
   // Reset UI controls
   (document.getElementById("cfg-steps") as HTMLInputElement).value = "32";
   (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
   (document.getElementById("cfg-title") as HTMLInputElement).value = "My Beat";
   // Reset quantize
-  quantize = "16n";
-  (document.getElementById("cfg-quantize") as HTMLSelectElement).value = "16n";
+  quantize = "8n";
+  (document.getElementById("cfg-quantize") as HTMLSelectElement).value = "8n";
   // Reset file input so same file can be re-imported
   const fileInput = document.getElementById("midi-file") as HTMLInputElement;
   if (fileInput) fileInput.value = "";
@@ -720,7 +660,6 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
   const removed = displayPitches.length - usedIndices.length;
   displayPitches = usedIndices.map((i) => displayPitches[i]);
   grid = usedIndices.map((i) => grid[i]);
-  attacks = usedIndices.map((i) => attacks[i] || []);
   renderRoll();
   status.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""} — ${displayPitches.length} rows remaining. Clear to restore full keyboard.`;
 });
@@ -733,7 +672,6 @@ document.getElementById("btn-del-first")!.addEventListener("click", () => {
   }
   steps -= 4;
   grid = grid.map((row) => row.slice(4));
-  attacks = attacks.map((row) => row.slice(4));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
   renderRoll();
   status.textContent = `Removed first bar — now ${steps} steps (${steps / 4} bar${steps / 4 !== 1 ? "s" : ""})`;
@@ -747,7 +685,6 @@ document.getElementById("btn-del-last")!.addEventListener("click", () => {
   }
   steps -= 4;
   grid = grid.map((row) => row.slice(0, steps));
-  attacks = attacks.map((row) => row.slice(0, steps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
   renderRoll();
   status.textContent = `Removed last bar — now ${steps} steps (${steps / 4} bar${steps / 4 !== 1 ? "s" : ""})`;
@@ -1373,7 +1310,7 @@ function revealSolution() {
 
 async function playTestPlayMelody() {
   await ensureAudio(bpm);
-  const secPerStep = 60 / bpm / quantizeDivisor(quantize);
+  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
   const transport = Tone.getTransport();
   transport.stop();
   transport.cancel();
