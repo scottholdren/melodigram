@@ -268,7 +268,6 @@ function checkSolved(): boolean {
 async function playBack(source: "grid" | "solution"): Promise<void> {
   if (isPlaying) return;
   await ensureAudio(currentPuzzle.bpm);
-  if (!isSamplerReady()) return;
 
   isPlaying = true;
   playBtn.disabled = true;

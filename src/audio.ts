@@ -1,12 +1,13 @@
 import * as Tone from "tone";
 
 let sampler: Tone.Sampler | null = null;
+let fallbackSynth: Tone.PolySynth | null = null;
 let audioStarted = false;
-let samplerReady = false;
+let ready = false;
+let useFallback = false;
 
 const SAMPLE_BASE = "https://tonejs.github.io/audio/salamander/";
 
-// Load a subset of Salamander Grand Piano samples — Tone.js interpolates the rest
 const SAMPLE_MAP: Record<string, string> = {
   C3: "C3.mp3",
   "D#3": "Ds3.mp3",
@@ -21,25 +22,59 @@ const SAMPLE_MAP: Record<string, string> = {
   "F#5": "Fs5.mp3",
 };
 
+function getFallbackSynth(): Tone.PolySynth {
+  if (!fallbackSynth) {
+    fallbackSynth = new Tone.PolySynth(Tone.Synth, {
+      maxPolyphony: 16,
+      voice: Tone.Synth,
+      options: {
+        oscillator: { type: "triangle" },
+        envelope: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.8 },
+      },
+    }).toDestination();
+  }
+  return fallbackSynth;
+}
+
 export function isSamplerReady(): boolean {
-  return samplerReady;
+  return ready;
 }
 
 export function loadPiano(): Promise<void> {
   return new Promise((resolve) => {
-    if (sampler) {
+    if (ready) {
       resolve();
       return;
     }
-    sampler = new Tone.Sampler({
-      urls: SAMPLE_MAP,
-      baseUrl: SAMPLE_BASE,
-      release: 1.5,
-      onload: () => {
-        samplerReady = true;
-        resolve();
-      },
-    }).toDestination();
+
+    // Timeout: if samples don't load in 8 seconds, fall back to synth
+    const timeout = setTimeout(() => {
+      console.warn("Piano samples timed out, using synth fallback");
+      useFallback = true;
+      ready = true;
+      resolve();
+    }, 8000);
+
+    try {
+      sampler = new Tone.Sampler({
+        urls: SAMPLE_MAP,
+        baseUrl: SAMPLE_BASE,
+        release: 1.5,
+        onload: () => {
+          clearTimeout(timeout);
+          useFallback = false;
+          ready = true;
+          console.log("Piano samples loaded");
+          resolve();
+        },
+      }).toDestination();
+    } catch (e) {
+      clearTimeout(timeout);
+      console.warn("Failed to create sampler, using synth fallback", e);
+      useFallback = true;
+      ready = true;
+      resolve();
+    }
   });
 }
 
@@ -49,11 +84,20 @@ export async function ensureAudio(bpm: number): Promise<void> {
     audioStarted = true;
   }
   Tone.getTransport().bpm.value = bpm;
+  // If piano hasn't loaded yet, ensure fallback is ready
+  if (!ready) {
+    useFallback = true;
+    ready = true;
+  }
 }
 
 export function playNote(note: string): void {
-  if (!sampler || !samplerReady) return;
-  sampler.triggerAttackRelease(note, "8n");
+  if (!ready) return;
+  if (!useFallback && sampler?.loaded) {
+    sampler.triggerAttackRelease(note, "8n");
+  } else {
+    getFallbackSynth().triggerAttackRelease(note, "8n");
+  }
 }
 
 export function getTransport(): typeof Tone.Transport {
@@ -65,8 +109,14 @@ export function scheduleNote(
   startTime: number,
   duration: number
 ): void {
-  if (!sampler || !samplerReady) return;
-  Tone.getTransport().schedule((time) => {
-    sampler!.triggerAttackRelease(note, duration, time);
-  }, startTime);
+  if (!useFallback && sampler?.loaded) {
+    Tone.getTransport().schedule((time) => {
+      sampler!.triggerAttackRelease(note, duration, time);
+    }, startTime);
+  } else {
+    const synth = getFallbackSynth();
+    Tone.getTransport().schedule((time) => {
+      synth.triggerAttackRelease(note, duration, time);
+    }, startTime);
+  }
 }
