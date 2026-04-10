@@ -151,7 +151,7 @@ async function previewTrack(trackIndex: number) {
 // --- Build sound selector dropdown HTML ---
 function soundSelectHTML(selectedIndex: number): string {
   let html = "";
-  const categories = ["808", "Boom Bap"];
+  const categories = [...new Set(ALL_SOUNDS.map((s) => s.category))];
   for (const cat of categories) {
     html += `<optgroup label="${cat}">`;
     ALL_SOUNDS.forEach((s, i) => {
