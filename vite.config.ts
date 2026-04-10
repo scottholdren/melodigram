@@ -9,6 +9,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         workshop: resolve(__dirname, "workshop.html"),
         drums: resolve(__dirname, "drums.html"),
+        sounds: resolve(__dirname, "sounds.html"),
       },
     },
   },
