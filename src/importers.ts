@@ -25,6 +25,7 @@ export interface TrackInfo {
   noteCount: number;
   lowestNote: number | null;
   highestNote: number | null;
+  notes: ImportedNote[]; // per-track notes (MIDI only)
 }
 
 export interface ImportResult {
@@ -112,9 +113,12 @@ function importMidi(buffer: ArrayBuffer): ImportResult {
     const inst = track.instrument;
     let lowest: number | null = null;
     let highest: number | null = null;
+    const trackNotes: ImportedNote[] = [];
     for (const note of track.notes) {
       if (lowest === null || note.midi < lowest) lowest = note.midi;
       if (highest === null || note.midi > highest) highest = note.midi;
+      trackNotes.push({ midi: note.midi, time: note.time, duration: note.duration });
+      notes.push({ midi: note.midi, time: note.time, duration: note.duration });
     }
 
     tracks.push({
@@ -128,14 +132,8 @@ function importMidi(buffer: ArrayBuffer): ImportResult {
       noteCount: track.notes.length,
       lowestNote: lowest,
       highestNote: highest,
+      notes: trackNotes,
     });
-
-    // Import every track's notes. Drum tracks will have weird pitches
-    // (36=kick, 38=snare, etc.) but the user can see that from the track
-    // info and decide what to do.
-    for (const note of track.notes) {
-      notes.push({ midi: note.midi, time: note.time, duration: note.duration });
-    }
   });
 
   return {

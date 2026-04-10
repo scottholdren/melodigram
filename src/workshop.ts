@@ -482,10 +482,147 @@ async function handleFile(file: File) {
   status.textContent = `Importing ${file.name}...`;
   try {
     const result = await importFile(file);
-    applyImport(result);
+    // For MIDI with multiple tracks, show a picker before importing
+    if (result.tracks && result.tracks.length > 1) {
+      showTrackPicker(result);
+    } else {
+      applyImport(result);
+    }
   } catch (err: any) {
     status.textContent = `Import error: ${err.message || err}`;
   }
+}
+
+// --- Track picker UI ---
+let pendingImport: ImportResult | null = null;
+let pickerOverlay: HTMLDivElement | null = null;
+
+function showTrackPicker(result: ImportResult) {
+  if (!result.tracks) return;
+  pendingImport = result;
+
+  // Build overlay
+  if (pickerOverlay) pickerOverlay.remove();
+  pickerOverlay = document.createElement("div");
+  pickerOverlay.className = "track-picker-overlay";
+
+  const panel = document.createElement("div");
+  panel.className = "track-picker-panel";
+
+  const heading = document.createElement("h2");
+  heading.textContent = `Import tracks from "${result.title}"`;
+  panel.appendChild(heading);
+
+  const hint = document.createElement("p");
+  hint.className = "track-picker-hint";
+  hint.textContent = "Check the tracks you want to import. Drum tracks use our drum samples.";
+  panel.appendChild(hint);
+
+  const list = document.createElement("div");
+  list.className = "track-picker-list";
+  panel.appendChild(list);
+
+  const selected = new Set<number>();
+
+  for (const track of result.tracks) {
+    if (track.noteCount === 0) continue;
+
+    const item = document.createElement("label");
+    item.className = "track-picker-item";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    selected.add(track.index);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selected.add(track.index);
+      else selected.delete(track.index);
+    });
+    item.appendChild(checkbox);
+
+    const info = document.createElement("div");
+    info.className = "track-picker-info";
+
+    const nameLine = document.createElement("div");
+    nameLine.className = "track-picker-name";
+    nameLine.textContent = `${track.index + 1}. ${track.name || "(unnamed)"}`;
+    info.appendChild(nameLine);
+
+    const detailLine = document.createElement("div");
+    detailLine.className = "track-picker-detail";
+    const range = track.lowestNote !== null && track.highestNote !== null
+      ? `${midiToNote(track.lowestNote)}–${midiToNote(track.highestNote)}`
+      : "empty";
+    const drumLabel = track.isDrums ? " · DRUMS" : "";
+    const chLabel = track.channel === 9 ? " (ch 10)" : ` (ch ${track.channel + 1})`;
+    detailLine.textContent = `${track.instrument}${drumLabel}${chLabel} · ${track.noteCount} notes · ${range}`;
+    info.appendChild(detailLine);
+
+    item.appendChild(info);
+    list.appendChild(item);
+  }
+
+  // Buttons
+  const buttons = document.createElement("div");
+  buttons.className = "track-picker-buttons";
+
+  const allBtn = document.createElement("button");
+  allBtn.textContent = "Select all";
+  allBtn.addEventListener("click", () => {
+    pickerOverlay?.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
+      cb.checked = true;
+      cb.dispatchEvent(new Event("change"));
+    });
+  });
+  buttons.appendChild(allBtn);
+
+  const noneBtn = document.createElement("button");
+  noneBtn.textContent = "Select none";
+  noneBtn.addEventListener("click", () => {
+    pickerOverlay?.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
+      cb.checked = false;
+      cb.dispatchEvent(new Event("change"));
+    });
+  });
+  buttons.appendChild(noneBtn);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", () => {
+    pickerOverlay?.remove();
+    pickerOverlay = null;
+    pendingImport = null;
+    status.textContent = "";
+  });
+  buttons.appendChild(cancelBtn);
+
+  const importBtn = document.createElement("button");
+  importBtn.textContent = "Import selected";
+  importBtn.className = "primary";
+  importBtn.addEventListener("click", () => {
+    if (!pendingImport) return;
+    const filtered = filterImportBySelectedTracks(pendingImport, selected);
+    pickerOverlay?.remove();
+    pickerOverlay = null;
+    applyImport(filtered);
+    pendingImport = null;
+  });
+  buttons.appendChild(importBtn);
+
+  panel.appendChild(buttons);
+  pickerOverlay.appendChild(panel);
+  app.appendChild(pickerOverlay);
+}
+
+function filterImportBySelectedTracks(result: ImportResult, selected: Set<number>): ImportResult {
+  if (!result.tracks) return result;
+  const keptTracks = result.tracks.filter((t) => selected.has(t.index));
+  const keptNotes = keptTracks.flatMap((t) => t.notes || []);
+  return {
+    ...result,
+    notes: keptNotes,
+    tracks: keptTracks,
+  };
 }
 
 function applyImport(result: ImportResult) {
@@ -513,104 +650,59 @@ function applyImport(result: ImportResult) {
   let placed = 0;
 
   if (result.tracks && result.tracks.length > 0) {
-    // Build a set of rows per track, only for pitches that are actually used
+    // Build rows from each track using its own per-track notes
     const newRows: RowSound[] = [];
-    const rowKeyToIndex = new Map<string, number>();
-
-    // Re-parse notes per track to preserve which track they came from
-    // (we only have a flat notes list here, so we regenerate rows based on
-    //  tracks + each track's pitch range and instrument)
-    const trackRowRanges: { trackIndex: number; rowStart: number; rowEnd: number; isDrums: boolean; inst: InstrumentKey }[] = [];
+    // Map from (trackIndex + midi) → row index
+    const rowIndexByTrackMidi = new Map<string, number>();
 
     for (const t of result.tracks) {
-      if (t.noteCount === 0) continue;
+      if (t.noteCount === 0 || !t.notes) continue;
 
       const isDrums = t.isDrums;
       const inst: InstrumentKey = isDrums ? "drums" : gmProgramToInstrumentPrecise(getProgramFromInstrument(t));
-      const rowStart = newRows.length;
 
-      if (isDrums) {
-        // For drum tracks: one row per unique MIDI note in the track,
-        // mapped to the nearest drum sound from our kit
-        const uniqueNotes = new Set<number>();
-        for (const n of result.notes) {
-          // We don't have per-track notes here, so we approximate by checking
-          // if the note's midi value is in this track's range and the track
-          // is drums. This won't be perfectly accurate for overlapping tracks.
-          if (isDrums && t.lowestNote !== null && t.highestNote !== null &&
-              n.midi >= t.lowestNote && n.midi <= t.highestNote) {
-            uniqueNotes.add(n.midi);
-          }
-        }
-        // Sort descending (higher MIDI = higher row visually)
-        const sorted = [...uniqueNotes].sort((a, b) => b - a);
-        for (const midi of sorted) {
+      // Collect unique MIDI notes actually used by this track
+      const uniqueMidi = new Set<number>();
+      for (const n of t.notes) uniqueMidi.add(n.midi);
+      const sortedMidi = [...uniqueMidi].sort((a, b) => b - a); // high to low
+
+      for (const midi of sortedMidi) {
+        let row: RowSound;
+        if (isDrums) {
           const soundName = gmDrumNoteToSoundName(midi);
           const label = `${soundName} (${GM_DRUM_NAMES[midi] || `note ${midi}`})`;
-          const key = `drum:${midi}`;
-          rowKeyToIndex.set(key, newRows.length);
-          newRows.push({ label, instrument: "drums", drumSound: soundName });
+          row = { label, instrument: "drums", drumSound: soundName };
+        } else {
+          const pitch = midiToNote(midi);
+          row = { label: pitch, instrument: inst, pitch };
         }
-      } else {
-        // For melodic tracks: create one row per pitch in the track's range
-        if (t.lowestNote !== null && t.highestNote !== null) {
-          for (let m = t.highestNote; m >= t.lowestNote; m--) {
-            const pitch = midiToNote(m);
-            const label = `${pitch}`;
-            const key = `${inst}:${pitch}`;
-            rowKeyToIndex.set(key, newRows.length);
-            newRows.push({ label, instrument: inst, pitch });
-          }
-        }
+        const rowIdx = newRows.length;
+        newRows.push(row);
+        rowIndexByTrackMidi.set(`${t.index}:${midi}`, rowIdx);
       }
-
-      trackRowRanges.push({
-        trackIndex: t.index,
-        rowStart,
-        rowEnd: newRows.length,
-        isDrums,
-        inst,
-      });
     }
 
     if (newRows.length === 0) {
-      // Fall back: full piano keyboard
       setRows(ALL_PITCHES.map(pianoRow));
+      grid = workRows.map(() => Array(steps).fill(false));
     } else {
       setRows(newRows);
-    }
+      grid = workRows.map(() => Array(steps).fill(false));
 
-    grid = workRows.map(() => Array(steps).fill(false));
-
-    // Place notes. For each flat note, find the track it belongs to by
-    // matching its midi against each track's pitch range.
-    for (const note of result.notes) {
-      // Find the best-matching track (first one whose range contains this note)
-      let targetRowKey: string | null = null;
+      // Place notes using per-track data — no more pitch-range guessing
       for (const t of result.tracks) {
-        if (t.noteCount === 0) continue;
-        if (t.lowestNote !== null && t.highestNote !== null &&
-            note.midi >= t.lowestNote && note.midi <= t.highestNote) {
-          if (t.isDrums) {
-            targetRowKey = `drum:${note.midi}`;
-          } else {
-            const inst = gmProgramToInstrumentPrecise(getProgramFromInstrument(t));
-            targetRowKey = `${inst}:${midiToNote(note.midi)}`;
+        if (!t.notes) continue;
+        for (const note of t.notes) {
+          const rowIdx = rowIndexByTrackMidi.get(`${t.index}:${note.midi}`);
+          if (rowIdx === undefined) continue;
+          const startStep = Math.round(note.time / secPerStep);
+          const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
+          for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
+            if (s >= 0) {
+              grid[rowIdx][s] = true;
+              placed++;
+            }
           }
-          break;
-        }
-      }
-
-      if (targetRowKey === null) continue;
-      const rowIndex = rowKeyToIndex.get(targetRowKey);
-      if (rowIndex === undefined) continue;
-
-      const startStep = Math.round(note.time / secPerStep);
-      const durationSteps = Math.max(1, Math.round(note.duration / secPerStep));
-      for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
-        if (s >= 0) {
-          grid[rowIndex][s] = true;
-          placed++;
         }
       }
     }
