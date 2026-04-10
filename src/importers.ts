@@ -14,11 +14,24 @@ export interface ImportedNote {
   duration: number;
 }
 
+export interface TrackInfo {
+  index: number;
+  name: string;
+  channel: number;
+  instrument: string;
+  family: string;
+  isDrums: boolean;
+  noteCount: number;
+  lowestNote: number | null;
+  highestNote: number | null;
+}
+
 export interface ImportResult {
   notes: ImportedNote[];
   bpm: number | null;
   title: string;
   format: string;
+  tracks?: TrackInfo[];
 }
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -92,37 +105,43 @@ async function readTextStart(file: File, bytes: number): Promise<string | null> 
 function importMidi(buffer: ArrayBuffer): ImportResult {
   const midi = new Midi(buffer);
   const notes: ImportedNote[] = [];
-  const skipped: string[] = [];
+  const tracks: TrackInfo[] = [];
 
-  for (const track of midi.tracks) {
-    // Skip drum tracks — channel 10 in 1-indexed MIDI (channel === 9 zero-indexed).
-    // Their note numbers are drum sounds, not pitches, so placing them on a
-    // piano roll is nonsense.
-    if (track.channel === 9) {
-      if (track.notes.length > 0) {
-        skipped.push(`${track.name || "drums"} (ch 10, drum track)`);
-      }
-      continue;
+  midi.tracks.forEach((track, i) => {
+    const inst = track.instrument;
+    let lowest: number | null = null;
+    let highest: number | null = null;
+    for (const note of track.notes) {
+      if (lowest === null || note.midi < lowest) lowest = note.midi;
+      if (highest === null || note.midi > highest) highest = note.midi;
     }
 
-    // Skip empty tracks silently
-    if (track.notes.length === 0) continue;
+    tracks.push({
+      index: i,
+      name: track.name || `Track ${i + 1}`,
+      channel: track.channel,
+      instrument: inst?.name || "Unknown",
+      family: inst?.family || "unknown",
+      isDrums: inst?.percussion === true || track.channel === 9,
+      noteCount: track.notes.length,
+      lowestNote: lowest,
+      highestNote: highest,
+    });
 
+    // Import every track's notes. Drum tracks will have weird pitches
+    // (36=kick, 38=snare, etc.) but the user can see that from the track
+    // info and decide what to do.
     for (const note of track.notes) {
       notes.push({ midi: note.midi, time: note.time, duration: note.duration });
     }
-  }
-
-  let title = midi.name || "MIDI Import";
-  if (skipped.length > 0) {
-    title += ` (skipped ${skipped.length} drum track${skipped.length > 1 ? "s" : ""})`;
-  }
+  });
 
   return {
     notes,
     bpm: midi.header.tempos.length > 0 ? Math.round(midi.header.tempos[0].bpm) : null,
-    title,
+    title: midi.name || "MIDI Import",
     format: "MIDI",
+    tracks,
   };
 }
 

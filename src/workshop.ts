@@ -480,6 +480,28 @@ function applyImport(result: ImportResult) {
   }
 
   status.textContent = `Imported ${result.notes.length} notes (${placed} cells) from ${result.format} — "${result.title}"`;
+
+  // Show the track breakdown in the export output so user can see what came in
+  if (result.tracks && result.tracks.length > 0) {
+    let report = `MIDI Import: "${result.title}"\n`;
+    report += `${result.tracks.length} track${result.tracks.length > 1 ? "s" : ""} found:\n\n`;
+    for (const t of result.tracks) {
+      const range = t.lowestNote !== null && t.highestNote !== null
+        ? `${midiToNote(t.lowestNote)}–${midiToNote(t.highestNote)}`
+        : "empty";
+      const drumMark = t.isDrums ? " [DRUMS — notes are drum sounds, not pitches]" : "";
+      report += `  Track ${t.index + 1}: "${t.name}"\n`;
+      report += `    Channel: ${t.channel + 1}${t.channel === 9 ? " (GM drums)" : ""}\n`;
+      report += `    Instrument: ${t.instrument} (${t.family})${drumMark}\n`;
+      report += `    ${t.noteCount} notes, range ${range}\n\n`;
+    }
+    report += `All tracks were imported onto the piano roll. Drum tracks place notes\n`;
+    report += `at nonsense pitches (kick=C2, snare=D2, etc.) since drum note numbers\n`;
+    report += `don't represent pitches. Delete unwanted rows manually or use Trim Empty\n`;
+    report += `after clearing the unwanted areas.\n`;
+    exportOutput.style.display = "block";
+    exportOutput.textContent = report;
+  }
 }
 
 // Drag and drop
