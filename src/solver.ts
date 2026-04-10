@@ -402,17 +402,13 @@ export async function checkSolvability(
 }
 
 /**
- * Make a puzzle playable by iteratively adding "given" cells until solvable.
+ * Make a puzzle playable by adding "given" cells until solvable.
  *
- * difficulty: 0 (easy, many givens) to 1 (hard, minimum givens)
- *
- * Strategy: only reveal FILLED (note) cells, never empties.
- * Prioritize reveals that unlock the most deductions:
- * - A note revealed in a [1] line instantly solves the whole line
- * - A note in a line with few short clues is more valuable than
- *   one in a dense line that's already mostly constrained
- *
- * Returns the set of cells that must be pre-filled as givens.
+ * Fast approach:
+ * 1. Disambiguate duplicate clues upfront (no solver needed)
+ * 2. Reveal notes in sparse lines (simple clues first)
+ * 3. Run solver once to check
+ * 4. If still stuck, batch-reveal 5% of remaining and retry
  */
 export async function makePlayable(
   solution: boolean[][],
@@ -421,6 +417,7 @@ export async function makePlayable(
 ): Promise<{ givens: [number, number][]; iterations: number }> {
   const rows = solution.length;
   const cols = solution[0]?.length || 0;
+  const totalCells = rows * cols;
 
   const rowClues = solution.map((row) => computeClues(row));
   const colClues: number[][] = [];
@@ -428,120 +425,125 @@ export async function makePlayable(
     colClues.push(computeClues(solution.map((row) => row[c])));
   }
 
-  // Pre-compute: for each line, how many filled cells does it have?
-  // Lines with fewer filled cells benefit most from a single reveal.
-  const rowNoteCounts = rowClues.map((clue) => clue.reduce((a, b) => a + b, 0));
-  const colNoteCounts = colClues.map((clue) => clue.reduce((a, b) => a + b, 0));
-
   const givens: [number, number][] = [];
   const givenSet = new Set<string>();
+
+  function addGiven(r: number, c: number) {
+    const key = `${r},${c}`;
+    if (!givenSet.has(key)) {
+      givens.push([r, c]);
+      givenSet.add(key);
+    }
+  }
+
+  // --- Phase 1: Disambiguate duplicate clues (fast, no solver) ---
+  onProgress?.("Phase 1: fixing duplicate clues...");
+  await yieldUI();
+
+  // Find rows with identical clues
+  const rowClueStr = rowClues.map((c) => c.join(","));
+  const rowGroups = new Map<string, number[]>();
+  rowClueStr.forEach((s, i) => {
+    if (!rowGroups.has(s)) rowGroups.set(s, []);
+    rowGroups.get(s)!.push(i);
+  });
+
+  // For each group of duplicate rows, reveal one note in all but one
+  for (const [, indices] of rowGroups) {
+    if (indices.length < 2) continue;
+    // Keep one row un-hinted, reveal a note in the rest
+    for (let i = 1; i < indices.length; i++) {
+      const r = indices[i];
+      // Find the first filled cell in this row
+      for (let c = 0; c < cols; c++) {
+        if (solution[r][c]) { addGiven(r, c); break; }
+      }
+    }
+  }
+
+  // Same for columns
+  const colClueStr = colClues.map((c) => c.join(","));
+  const colGroups = new Map<string, number[]>();
+  colClueStr.forEach((s, i) => {
+    if (!colGroups.has(s)) colGroups.set(s, []);
+    colGroups.get(s)!.push(i);
+  });
+
+  for (const [, indices] of colGroups) {
+    if (indices.length < 2) continue;
+    for (let i = 1; i < indices.length; i++) {
+      const c = indices[i];
+      for (let r = 0; r < rows; r++) {
+        if (solution[r][c]) { addGiven(r, c); break; }
+      }
+    }
+  }
+
+  onProgress?.(`Phase 1 done: ${givens.length} givens from duplicate clues`);
+  await yieldUI();
+
+  // --- Phase 2: Iterative solve with big batches ---
   let round = 0;
-  const maxRounds = rows * cols;
+  const maxRounds = 50; // should never need this many
+  const batchPct = 0.05; // 5% of total cells per round
 
   while (round < maxRounds) {
     round++;
-    onProgress?.(`Round ${round}: ${givens.length} givens, solving...`);
+    onProgress?.(`Phase 2, round ${round}: ${givens.length} givens, solving...`);
     await yieldUI();
 
     const result = await solveWithGivens(rows, cols, rowClues, colClues, solution, givenSet);
 
     if (result.solved) {
-      // On easy difficulty, add bonus note reveals spread across the grid
+      // Easy difficulty: add bonus givens spread across rows
       if (difficulty < 0.5) {
         const bonusCount = Math.floor((1 - difficulty) * rows * 0.3);
-        const candidates: [number, number][] = [];
+        const pool: [number, number][] = [];
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
-            if (solution[r][c] && !givenSet.has(`${r},${c}`)) {
-              candidates.push([r, c]);
-            }
+            if (solution[r][c] && !givenSet.has(`${r},${c}`)) pool.push([r, c]);
           }
         }
-        // Spread bonus evenly: pick from different rows
-        const byRow = new Map<number, [number, number][]>();
-        for (const [r, c] of candidates) {
-          if (!byRow.has(r)) byRow.set(r, []);
-          byRow.get(r)!.push([r, c]);
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
         }
-        let added = 0;
-        const rowKeys = [...byRow.keys()];
-        let ri = 0;
-        while (added < bonusCount && added < candidates.length) {
-          const row = rowKeys[ri % rowKeys.length];
-          const cells = byRow.get(row)!;
-          if (cells.length > 0) {
-            const pick = cells.splice(Math.floor(Math.random() * cells.length), 1)[0];
-            givens.push(pick);
-            givenSet.add(`${pick[0]},${pick[1]}`);
-            added++;
-          }
-          ri++;
-          if (ri > candidates.length + rowKeys.length) break; // safety
+        for (let i = 0; i < Math.min(bonusCount, pool.length); i++) {
+          addGiven(pool[i][0], pool[i][1]);
         }
       }
       break;
     }
 
-    // Find the best NOTE cell to reveal.
-    // Only consider filled cells (solution[r][c] === true) that are unsolved.
-    // Score each by how much information it provides:
-    // - Revealing a note in a line with fewer total notes = higher value
-    //   (e.g. revealing the one note in a [1] line solves it completely)
-    // - Prefer cells at the intersection of two unsolved lines
+    // Collect all unsolved note cells, scored by info gain
     const candidates: { r: number; c: number; score: number }[] = [];
-
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        // Only reveal actual notes, never empties
         if (!solution[r][c]) continue;
-        if (result.grid[r][c] !== 0) continue; // already determined
+        if (result.grid[r][c] !== 0) continue;
         if (givenSet.has(`${r},${c}`)) continue;
 
         const rowProb = result.problematic.find((p) => p.type === "row" && p.index === r);
         const colProb = result.problematic.find((p) => p.type === "col" && p.index === c);
-
-        if (!rowProb && !colProb) continue; // both lines already solved
-
-        // Score: inverse of note count (fewer notes = more info per reveal)
-        // A [1] line with 1 note: revealing it solves the whole line = high score
-        // A [4,3,2] line with 9 notes: revealing one helps less = low score
-        const rowInfoGain = rowProb ? (1 / Math.max(1, rowNoteCounts[r])) * rowProb.unknownCells : 0;
-        const colInfoGain = colProb ? (1 / Math.max(1, colNoteCounts[c])) * colProb.unknownCells : 0;
-        const score = rowInfoGain + colInfoGain;
-
-        candidates.push({ r, c, score });
+        const rowNotes = rowClues[r].reduce((a, b) => a + b, 0) || 1;
+        const colNotes = colClues[c].reduce((a, b) => a + b, 0) || 1;
+        const rowGain = rowProb ? (1 / rowNotes) * rowProb.unknownCells : 0;
+        const colGain = colProb ? (1 / colNotes) * colProb.unknownCells : 0;
+        candidates.push({ r, c, score: rowGain + colGain });
       }
     }
 
-    if (candidates.length === 0) {
-      // No more notes to reveal — remaining unknowns are all empty cells.
-      // Reveal one empty cell to break the tie.
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          if (result.grid[r][c] === 0 && !givenSet.has(`${r},${c}`)) {
-            givens.push([r, c]);
-            givenSet.add(`${r},${c}`);
-            break;
-          }
-        }
-        if (givens.length > round * 2) break; // safety
-      }
-      continue;
-    }
+    if (candidates.length === 0) break;
 
-    // Sort: highest info gain first
     candidates.sort((a, b) => b.score - a.score);
-
-    // Reveal a batch per round: ~1% of total cells, minimum 3
-    const batchSize = Math.max(3, Math.ceil(rows * cols * 0.01));
-    const toReveal = candidates.slice(0, Math.min(batchSize, candidates.length));
+    const batch = Math.max(5, Math.ceil(totalCells * batchPct));
+    const toReveal = candidates.slice(0, Math.min(batch, candidates.length));
     for (const { r, c } of toReveal) {
-      givens.push([r, c]);
-      givenSet.add(`${r},${c}`);
+      addGiven(r, c);
     }
   }
 
-  onProgress?.(`Done: ${givens.length} givens needed`);
+  onProgress?.(`Done: ${givens.length} givens in ${round} rounds`);
   return { givens, iterations: round };
 }
 
