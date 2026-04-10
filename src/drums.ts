@@ -82,6 +82,7 @@ controls.innerHTML = `
   <button id="btn-loop" class="primary">&#8635; Loop</button>
   <button id="btn-stop">&#9632; Stop</button>
   <button id="btn-clear">Clear</button>
+  <button id="btn-trim">Trim empty</button>
   <button id="btn-export" class="primary">Export</button>
 `;
 app.appendChild(controls);
@@ -385,6 +386,27 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   stopPlayback();
   grid = grid.map(() => Array(steps).fill(false));
   renderSequencer();
+});
+
+document.getElementById("btn-trim")!.addEventListener("click", () => {
+  if (isPlaying) return;
+  const keep: number[] = [];
+  for (let r = 0; r < grid.length; r++) {
+    if (grid[r]?.some(Boolean)) keep.push(r);
+  }
+  if (keep.length === grid.length) {
+    statusEl.textContent = "No empty rows to remove";
+    return;
+  }
+  if (keep.length === 0) {
+    statusEl.textContent = "All rows are empty — nothing to keep";
+    return;
+  }
+  const removed = grid.length - keep.length;
+  trackSounds = keep.map((i) => trackSounds[i]);
+  grid = keep.map((i) => grid[i]);
+  renderSequencer();
+  statusEl.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""}`;
 });
 
 // --- Export ---

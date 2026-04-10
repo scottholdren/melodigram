@@ -195,6 +195,7 @@ controls.innerHTML = `
   <button id="btn-loop" class="primary">&#8635; Loop</button>
   <button id="btn-stop">&#9632; Stop</button>
   <button id="btn-clear">Clear</button>
+  <button id="btn-trim">Trim empty</button>
   <button id="btn-export" class="primary">Export puzzle</button>
 `;
 app.appendChild(controls);
@@ -575,6 +576,41 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   stopPlayback();
   grid = ALL_PITCHES.map(() => Array(steps).fill(false));
   renderRoll();
+});
+
+document.getElementById("btn-trim")!.addEventListener("click", () => {
+  if (isPlaying) return;
+  // Find rows that have any notes
+  const emptyBefore = ALL_PITCHES.length;
+  let removed = 0;
+  for (let r = 0; r < ALL_PITCHES.length; r++) {
+    if (!grid[r]?.some(Boolean)) {
+      // Clear this row visually — it stays in the full pitch list
+      // but we'll scroll to the active area
+      removed++;
+    }
+  }
+  // For the piano roll, we can't remove pitches from ALL_PITCHES (it's the full keyboard).
+  // Instead, trim = remove empty rows by filtering the grid and rebuilding pitch list
+  const usedIndices: number[] = [];
+  for (let r = 0; r < ALL_PITCHES.length; r++) {
+    if (grid[r]?.some(Boolean)) usedIndices.push(r);
+  }
+  if (usedIndices.length === 0) {
+    status.textContent = "All rows are empty — nothing to keep";
+    return;
+  }
+  // Scroll to first used note
+  const body = rollContainer.querySelector(".roll-body") as HTMLElement;
+  if (body && usedIndices.length > 0) {
+    const firstRow = usedIndices[0];
+    const lastRow = usedIndices[usedIndices.length - 1];
+    const midRow = Math.floor((firstRow + lastRow) / 2);
+    requestAnimationFrame(() => {
+      body.scrollTop = midRow * 14 - body.clientHeight / 2;
+    });
+  }
+  status.textContent = `${usedIndices.length} rows with notes (scrolled to active area). Use Export to get trimmed output.`;
 });
 
 // --- Export ---
