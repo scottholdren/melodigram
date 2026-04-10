@@ -368,6 +368,95 @@ body {
 .play-cell.play-filled { border-color: transparent; }
 .play-cell.play-marked { color: #666; font-weight: bold; }
 
+/* Track mute panel (persistent, above the roll) */
+.track-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  background: #12121e;
+  border: 1px solid #22223a;
+  border-radius: 8px;
+}
+
+.track-panel-heading {
+  font-size: 0.65rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.track-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.track-chip {
+  background: #1a1a2e;
+  color: #ccc;
+  border: 1px solid #2a2a44;
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  transition: all 0.15s;
+  font-family: inherit;
+  text-align: left;
+  min-width: 110px;
+}
+
+.track-chip:hover {
+  border-color: #5566ff;
+}
+
+.track-chip.muted {
+  opacity: 0.35;
+  background: #0e0e16;
+  text-decoration: line-through;
+}
+
+.track-chip-num {
+  color: #666;
+  font-size: 0.6rem;
+  font-family: monospace;
+}
+
+.track-chip-name {
+  color: #ddd;
+  font-weight: 500;
+}
+
+.track-chip-inst {
+  color: #666;
+  font-size: 0.6rem;
+}
+
+.track-panel-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.track-panel-actions button {
+  background: transparent;
+  border: 1px solid #333;
+  color: #888;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  cursor: pointer;
+}
+
+/* Muted rows in the piano roll */
+.roll-cell.muted-row {
+  opacity: 0.25;
+}
+
 /* Track picker modal */
 .track-picker-overlay {
   position: fixed;

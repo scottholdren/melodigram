@@ -158,12 +158,84 @@ const INSTRUMENTS: Instrument[] = [
 // label + instrument + pitch/drumSound. Starts as every piano pitch, but
 // MIDI import can replace with track-specific rows using other instruments.
 let workRows: RowSound[] = ALL_PITCHES.map(pianoRow);
+// Track that each row came from (parallel to workRows). -1 = no track (manual/piano default).
+let rowTrackIndex: number[] = workRows.map(() => -1);
+// Info about the currently loaded tracks (after MIDI import)
+let currentTracks: { index: number; name: string; instrument: string; isDrums: boolean; noteCount: number }[] = [];
+// Which tracks are muted (wouldn't sound on playback or click)
+let mutedTracks: Set<number> = new Set();
 // Legacy alias for existing code paths that only need the label
 let displayPitches: string[] = [...ALL_PITCHES];
 
 function setRows(rows: RowSound[]) {
   workRows = rows;
   displayPitches = rows.map((r) => r.label);
+}
+
+function isRowMuted(rowIndex: number): boolean {
+  const ti = rowTrackIndex[rowIndex];
+  if (ti === undefined || ti < 0) return false;
+  return mutedTracks.has(ti);
+}
+
+function renderTrackPanel() {
+  trackPanel.innerHTML = "";
+  if (currentTracks.length === 0) {
+    trackPanel.style.display = "none";
+    return;
+  }
+  trackPanel.style.display = "flex";
+
+  const heading = document.createElement("div");
+  heading.className = "track-panel-heading";
+  heading.textContent = "Tracks";
+  trackPanel.appendChild(heading);
+
+  const row = document.createElement("div");
+  row.className = "track-panel-row";
+  trackPanel.appendChild(row);
+
+  for (const track of currentTracks) {
+    const chip = document.createElement("button");
+    chip.className = "track-chip";
+    if (mutedTracks.has(track.index)) chip.classList.add("muted");
+
+    const rowCount = rowTrackIndex.filter((i) => i === track.index).length;
+    chip.innerHTML = `
+      <span class="track-chip-num">${track.index + 1}</span>
+      <span class="track-chip-name">${track.name}</span>
+      <span class="track-chip-inst">${track.instrument}${track.isDrums ? " · drums" : ""} · ${rowCount} row${rowCount !== 1 ? "s" : ""}</span>
+    `;
+    chip.addEventListener("click", () => {
+      if (mutedTracks.has(track.index)) mutedTracks.delete(track.index);
+      else mutedTracks.add(track.index);
+      renderTrackPanel();
+      updateRowMuteStyling();
+    });
+    row.appendChild(chip);
+  }
+
+  // Global actions
+  const actions = document.createElement("div");
+  actions.className = "track-panel-actions";
+  const unmuteAll = document.createElement("button");
+  unmuteAll.textContent = "Unmute all";
+  unmuteAll.addEventListener("click", () => {
+    mutedTracks.clear();
+    renderTrackPanel();
+    updateRowMuteStyling();
+  });
+  actions.appendChild(unmuteAll);
+  trackPanel.appendChild(actions);
+}
+
+function updateRowMuteStyling() {
+  for (let r = 0; r < workRows.length; r++) {
+    const muted = isRowMuted(r);
+    for (let c = 0; c < (seqCells[r]?.length || 0); c++) {
+      seqCells[r]?.[c]?.classList.toggle("muted-row", muted);
+    }
+  }
 }
 let steps = 32;
 let bpm = 120;
@@ -231,6 +303,12 @@ const midiDrop = document.createElement("div");
 midiDrop.className = "midi-drop";
 midiDrop.innerHTML = `<span>Drop sheet music here — MIDI, MusicXML, ABC notation, or <label class="midi-browse">browse<input type="file" id="midi-file" accept=".mid,.midi,.xml,.musicxml,.mxl,.abc" hidden></label></span>`;
 app.appendChild(midiDrop);
+
+// Track mute panel (appears after MIDI import with multiple tracks)
+const trackPanel = document.createElement("div");
+trackPanel.className = "track-panel";
+trackPanel.style.display = "none";
+app.appendChild(trackPanel);
 
 // Piano roll container
 const rollContainer = document.createElement("div");
@@ -409,6 +487,7 @@ function renderRoll() {
         const cls = row.pitch ? noteColorClass(row.pitch) : "note-C";
         cell.classList.add("active", cls);
       }
+      if (isRowMuted(r)) cell.classList.add("muted-row");
 
       const ri = r, ci = c;
       const thisRow = row;
@@ -419,7 +498,9 @@ function renderRoll() {
         if (grid[ri][ci]) {
           const cls = thisRow.pitch ? noteColorClass(thisRow.pitch) : "note-C";
           cell.classList.add("active", cls);
-          playInstrumentRow(thisRow.instrument, { pitch: thisRow.pitch, drumSound: thisRow.drumSound });
+          if (!isRowMuted(ri)) {
+            playInstrumentRow(thisRow.instrument, { pitch: thisRow.pitch, drumSound: thisRow.drumSound });
+          }
         } else {
           cell.className = "roll-cell";
           if (ci % 4 === 0) cell.classList.add("bar-line");
@@ -652,6 +733,7 @@ function applyImport(result: ImportResult) {
   if (result.tracks && result.tracks.length > 0) {
     // Build rows from each track using its own per-track notes
     const newRows: RowSound[] = [];
+    const newRowTracks: number[] = [];
     // Map from (trackIndex + midi) → row index
     const rowIndexByTrackMidi = new Map<string, number>();
 
@@ -678,15 +760,30 @@ function applyImport(result: ImportResult) {
         }
         const rowIdx = newRows.length;
         newRows.push(row);
+        newRowTracks.push(t.index);
         rowIndexByTrackMidi.set(`${t.index}:${midi}`, rowIdx);
       }
     }
 
+    // Populate track info for the mute panel
+    currentTracks = result.tracks
+      .filter((t) => t.noteCount > 0 && t.notes && t.notes.length > 0)
+      .map((t) => ({
+        index: t.index,
+        name: t.name || `Track ${t.index + 1}`,
+        instrument: t.isDrums ? "Drums" : t.instrument,
+        isDrums: t.isDrums,
+        noteCount: t.noteCount,
+      }));
+    mutedTracks = new Set();
+
     if (newRows.length === 0) {
       setRows(ALL_PITCHES.map(pianoRow));
+      rowTrackIndex = workRows.map(() => -1);
       grid = workRows.map(() => Array(steps).fill(false));
     } else {
       setRows(newRows);
+      rowTrackIndex = newRowTracks;
       grid = workRows.map(() => Array(steps).fill(false));
 
       // Place notes using per-track data — no more pitch-range guessing
@@ -715,10 +812,15 @@ function applyImport(result: ImportResult) {
       if (r.drumSound) drumNames.push(r.drumSound);
     }
     preloadInstruments([...instKeys], drumNames);
+    renderTrackPanel();
   } else {
     // No track info — use full piano keyboard
     setRows(ALL_PITCHES.map(pianoRow));
+    rowTrackIndex = workRows.map(() => -1);
+    currentTracks = [];
+    mutedTracks = new Set();
     grid = workRows.map(() => Array(steps).fill(false));
+    renderTrackPanel();
 
     for (const note of result.notes) {
       const pitchName = midiToNote(note.midi);
@@ -810,6 +912,7 @@ async function playOnce(): Promise<void> {
   // Schedule notes with duration awareness, using each row's instrument
   for (let r = 0; r < workRows.length; r++) {
     if (!grid[r]) continue;
+    if (isRowMuted(r)) continue;
     const rowSound = workRows[r];
     let c = 0;
     while (c < steps) {
@@ -887,8 +990,12 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   steps = 32;
   bpm = 120;
   title = "My Beat";
-  displayPitches = [...ALL_PITCHES];
-  grid = displayPitches.map(() => Array(steps).fill(false));
+  setRows(ALL_PITCHES.map(pianoRow));
+  rowTrackIndex = workRows.map(() => -1);
+  currentTracks = [];
+  mutedTracks = new Set();
+  renderTrackPanel();
+  grid = workRows.map(() => Array(steps).fill(false));
   // Reset UI controls
   (document.getElementById("cfg-steps") as HTMLInputElement).value = "32";
   (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
