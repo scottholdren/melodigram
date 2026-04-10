@@ -92,17 +92,36 @@ async function readTextStart(file: File, bytes: number): Promise<string | null> 
 function importMidi(buffer: ArrayBuffer): ImportResult {
   const midi = new Midi(buffer);
   const notes: ImportedNote[] = [];
+  const skipped: string[] = [];
 
   for (const track of midi.tracks) {
+    // Skip drum tracks — channel 10 in 1-indexed MIDI (channel === 9 zero-indexed).
+    // Their note numbers are drum sounds, not pitches, so placing them on a
+    // piano roll is nonsense.
+    if (track.channel === 9) {
+      if (track.notes.length > 0) {
+        skipped.push(`${track.name || "drums"} (ch 10, drum track)`);
+      }
+      continue;
+    }
+
+    // Skip empty tracks silently
+    if (track.notes.length === 0) continue;
+
     for (const note of track.notes) {
       notes.push({ midi: note.midi, time: note.time, duration: note.duration });
     }
   }
 
+  let title = midi.name || "MIDI Import";
+  if (skipped.length > 0) {
+    title += ` (skipped ${skipped.length} drum track${skipped.length > 1 ? "s" : ""})`;
+  }
+
   return {
     notes,
     bpm: midi.header.tempos.length > 0 ? Math.round(midi.header.tempos[0].bpm) : null,
-    title: midi.name || "MIDI Import",
+    title,
     format: "MIDI",
   };
 }
