@@ -307,6 +307,123 @@ export function computeClues(line: boolean[]): number[] {
   return clues;
 }
 
+/**
+ * Count solutions via backtracking with column-prefix pruning.
+ * Bails as soon as count reaches maxCount (we usually just need "is it 1?").
+ * Returns Infinity if any row has capped placements (can't brute force reliably).
+ */
+export async function countSolutions(
+  rowClues: number[][],
+  colClues: number[][],
+  rows: number,
+  cols: number,
+  maxCount: number = 2,
+  onProgress?: ProgressCallback
+): Promise<number> {
+  // Generate placements for each row
+  const rowPlacements: boolean[][][] = [];
+  for (let r = 0; r < rows; r++) {
+    const { placements, capped } = generatePlacements(rowClues[r], cols);
+    if (capped) return Infinity; // can't trust brute force
+    rowPlacements.push(placements);
+  }
+
+  // Quick size check — if total combinations are huge, bail
+  let totalCombos = 1;
+  for (const p of rowPlacements) {
+    totalCombos *= p.length;
+    if (totalCombos > 1e9) return Infinity;
+  }
+
+  const grid: boolean[][] = Array.from({ length: rows }, () => Array(cols).fill(false));
+  let count = 0;
+  let attempts = 0;
+
+  // Column partial clue check: given filled cells in rows 0..r, verify
+  // the column's runs so far are a valid prefix of the full clue
+  function colPrefixValid(c: number, upToRow: number): boolean {
+    const target = colClues[c];
+    const partial: number[] = [];
+    let run = 0;
+    let gapAfterLastRun = false;
+    for (let r = 0; r <= upToRow; r++) {
+      if (grid[r][c]) {
+        run++;
+        gapAfterLastRun = false;
+      } else if (run > 0) {
+        partial.push(run);
+        run = 0;
+        gapAfterLastRun = true;
+      }
+    }
+    // The partial must be consistent with target
+    // Complete runs so far must match target prefix
+    for (let i = 0; i < partial.length; i++) {
+      if (i >= target.length) return false;
+      if (partial[i] !== target[i]) return false;
+    }
+    // Current incomplete run must not exceed the next expected clue
+    if (run > 0) {
+      if (partial.length >= target.length) return false;
+      if (run > target[partial.length]) return false;
+    }
+    // If we're past the last row, the total must match exactly
+    if (upToRow === rows - 1) {
+      if (run > 0) partial.push(run);
+      if (partial.length !== target.length) return false;
+      for (let i = 0; i < partial.length; i++) {
+        if (partial[i] !== target[i]) return false;
+      }
+    }
+    // Check remaining capacity: if we still have clues to place,
+    // there must be enough rows left
+    const rowsLeft = rows - 1 - upToRow;
+    const cluesPlaced = partial.length + (run > 0 ? 0 : 0);
+    const activeClueIdx = run > 0 ? partial.length : partial.length;
+    const remainingClues = target.slice(activeClueIdx + (run > 0 ? 1 : 0));
+    // If there's an active run, the remaining needed = target[activeClueIdx] - run
+    let needed = 0;
+    if (run > 0) {
+      needed += target[activeClueIdx] - run;
+    }
+    for (let i = activeClueIdx + (run > 0 ? 1 : 0); i < target.length; i++) {
+      needed += target[i];
+      if (i > activeClueIdx + (run > 0 ? 1 : 0) || (run === 0 && i > activeClueIdx)) needed += 1; // gap
+    }
+    if (needed > rowsLeft + (run > 0 ? 1 : 0)) return false;
+    return true;
+  }
+
+  async function tryRow(r: number): Promise<void> {
+    if (count >= maxCount) return;
+    attempts++;
+    if (attempts % 1000 === 0) {
+      onProgress?.(`Counting solutions: ${count} found, ${attempts} attempts`);
+      await yieldUI();
+    }
+
+    if (r === rows) {
+      count++;
+      return;
+    }
+
+    for (const placement of rowPlacements[r]) {
+      for (let c = 0; c < cols; c++) grid[r][c] = placement[c];
+
+      // Prune: check each column's partial clue validity
+      let valid = true;
+      for (let c = 0; c < cols; c++) {
+        if (!colPrefixValid(c, r)) { valid = false; break; }
+      }
+      if (valid) await tryRow(r + 1);
+      if (count >= maxCount) return;
+    }
+  }
+
+  await tryRow(0);
+  return count;
+}
+
 export async function checkSolvability(
   solution: boolean[][],
   rowLabels?: string[],
@@ -325,19 +442,49 @@ export async function checkSolvability(
   const result = await solveAsync(rows, cols, rowClues, colClues, onProgress);
   const pct = Math.round((result.solvedCells / result.totalCells) * 100);
 
+  // Run brute-force uniqueness check to catch puzzles the line solver
+  // accepts but that actually have multiple valid solutions.
+  onProgress?.("Verifying uniqueness via brute force...");
+  await yieldUI();
+  const solCount = await countSolutions(rowClues, colClues, rows, cols, 2, onProgress);
+
   let report = "";
 
-  if (result.contradiction) {
-    report += "CONTRADICTION — the clues are internally inconsistent.\n\n";
+  // Determine overall status from brute-force count
+  if (result.contradiction || solCount === 0) {
+    report += "NO SOLUTIONS — the clues are contradictory.\n\n";
+    return { result, report };
   }
 
-  if (result.solved) {
-    report += `SOLVABLE — uniquely solvable by logic alone.\n`;
+  if (solCount === 1 && result.solved) {
+    report += `SOLVABLE & UNIQUE — exactly one solution, reachable by line logic.\n`;
     report += `${result.totalCells} cells resolved in ${result.iterations} iterations.\n`;
-  } else {
-    report += `NOT SOLVABLE by line logic alone.\n`;
-    report += `${result.solvedCells}/${result.totalCells} cells resolved (${pct}%), ${result.totalCells - result.solvedCells} ambiguous.\n`;
-    report += `Ran ${result.iterations} iterations before getting stuck.\n\n`;
+    return { result, report };
+  }
+
+  if (solCount === 1 && !result.solved) {
+    report += `UNIQUE but requires look-ahead.\n`;
+    report += `Exactly one solution exists, but line logic alone only resolves ${result.solvedCells}/${result.totalCells} cells (${pct}%).\n`;
+    report += `A human solver would need to try a few possibilities to find it.\n\n`;
+  } else if (solCount >= 2) {
+    report += `NOT UNIQUE — found at least ${solCount} valid solutions.\n`;
+    report += `The clues don't uniquely determine a single grid. Multiple fills satisfy all clues.\n\n`;
+  } else if (solCount === Infinity) {
+    report += `WARNING: puzzle too large for brute-force uniqueness check.\n`;
+    if (result.solved) {
+      report += `Line logic fully resolves it in ${result.iterations} iterations, which strongly suggests uniqueness.\n`;
+      return { result, report };
+    }
+    report += `Line logic resolves ${result.solvedCells}/${result.totalCells} cells (${pct}%). Remaining ambiguity may or may not have multiple solutions.\n\n`;
+  }
+
+  // Continue with problem diagnostics for non-solvable or non-unique cases
+  const needsDiagnostics = !result.solved || solCount >= 2;
+  if (needsDiagnostics) {
+    if (!result.solved) {
+      report += `Line logic stuck at ${result.solvedCells}/${result.totalCells} cells (${pct}%).\n`;
+      report += `Ran ${result.iterations} iterations.\n\n`;
+    }
 
     const probRows = result.problematic.filter((p) => p.type === "row");
     const probCols = result.problematic.filter((p) => p.type === "col");
