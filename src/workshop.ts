@@ -116,11 +116,12 @@ const INSTRUMENTS: Instrument[] = [
 ];
 
 // --- State ---
+let displayPitches: string[] = [...ALL_PITCHES];
 let steps = 32;
 let bpm = 120;
 let quantize: "4n" | "8n" | "16n" = "8n";
 let title = "My Beat";
-let grid: boolean[][] = ALL_PITCHES.map(() => Array(steps).fill(false));
+let grid: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
 let seqCells: HTMLDivElement[][] = [];
 let isPlaying = false;
 let looping = false;
@@ -300,8 +301,8 @@ function renderRoll() {
 
   seqCells = [];
 
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
-    const pitch = ALL_PITCHES[r];
+  for (let r = 0; r < displayPitches.length; r++) {
+    const pitch = displayPitches[r];
     const black = isBlackKey(pitch);
     const isC = pitch.startsWith("C") && !pitch.startsWith("C#");
 
@@ -336,8 +337,8 @@ function renderRoll() {
         if (!grid[ri]) grid[ri] = Array(steps).fill(false);
         grid[ri][ci] = !grid[ri][ci];
         if (grid[ri][ci]) {
-          cell.classList.add("active", noteColorClass(ALL_PITCHES[ri]));
-          triggerNote(ALL_PITCHES[ri]);
+          cell.classList.add("active", noteColorClass(displayPitches[ri]));
+          triggerNote(displayPitches[ri]);
         } else {
           cell.className = "roll-cell";
           if (ci % 4 === 0) cell.classList.add("bar-line");
@@ -358,7 +359,7 @@ function renderRoll() {
   rollContainer.appendChild(roll);
 
   // Scroll to middle C area
-  const middleCIndex = ALL_PITCHES.indexOf("C4");
+  const middleCIndex = displayPitches.indexOf("C4");
   if (middleCIndex > 0) {
     const scrollTarget = middleCIndex * 16 - body.clientHeight / 2;
     requestAnimationFrame(() => {
@@ -426,8 +427,9 @@ function applyImport(result: ImportResult) {
   steps = Math.max(16, Math.min(128, neededSteps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
 
-  // Reset grid
-  grid = ALL_PITCHES.map(() => Array(steps).fill(false));
+  // Reset grid to full keyboard
+  displayPitches = [...ALL_PITCHES];
+  grid = displayPitches.map(() => Array(steps).fill(false));
 
   // Place notes
   let placed = 0;
@@ -451,7 +453,7 @@ function applyImport(result: ImportResult) {
   renderRoll();
 
   // Scroll to the first note
-  const firstRow = ALL_PITCHES.findIndex((_, r) => grid[r]?.some(Boolean));
+  const firstRow = displayPitches.findIndex((_, r) => grid[r]?.some(Boolean));
   if (firstRow >= 0) {
     const body = rollContainer.querySelector(".roll-body") as HTMLElement;
     if (body) {
@@ -496,14 +498,14 @@ async function playOnce(): Promise<void> {
   transport.position = 0;
 
   // Schedule notes with duration awareness
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
+  for (let r = 0; r < displayPitches.length; r++) {
     if (!grid[r]) continue;
     let c = 0;
     while (c < steps) {
       if (grid[r][c]) {
         let len = 1;
         while (c + len < steps && grid[r][c + len]) len++;
-        const note = ALL_PITCHES[r];
+        const note = displayPitches[r];
         const startTime = c * secPerStep;
         const dur = len * secPerStep * 0.85;
 
@@ -576,50 +578,37 @@ document.getElementById("btn-loop")!.addEventListener("click", () => { looping ?
 document.getElementById("btn-stop")!.addEventListener("click", stopPlayback);
 document.getElementById("btn-clear")!.addEventListener("click", () => {
   stopPlayback();
-  grid = ALL_PITCHES.map(() => Array(steps).fill(false));
+  displayPitches = [...ALL_PITCHES];
+  grid = displayPitches.map(() => Array(steps).fill(false));
   renderRoll();
 });
 
 document.getElementById("btn-trim")!.addEventListener("click", () => {
   if (isPlaying) return;
-  // Find rows that have any notes
-  const emptyBefore = ALL_PITCHES.length;
-  let removed = 0;
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
-    if (!grid[r]?.some(Boolean)) {
-      // Clear this row visually — it stays in the full pitch list
-      // but we'll scroll to the active area
-      removed++;
-    }
-  }
-  // For the piano roll, we can't remove pitches from ALL_PITCHES (it's the full keyboard).
-  // Instead, trim = remove empty rows by filtering the grid and rebuilding pitch list
   const usedIndices: number[] = [];
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
+  for (let r = 0; r < displayPitches.length; r++) {
     if (grid[r]?.some(Boolean)) usedIndices.push(r);
   }
   if (usedIndices.length === 0) {
-    status.textContent = "All rows are empty — nothing to keep";
+    status.textContent = "All rows are empty — nothing to trim";
     return;
   }
-  // Scroll to first used note
-  const body = rollContainer.querySelector(".roll-body") as HTMLElement;
-  if (body && usedIndices.length > 0) {
-    const firstRow = usedIndices[0];
-    const lastRow = usedIndices[usedIndices.length - 1];
-    const midRow = Math.floor((firstRow + lastRow) / 2);
-    requestAnimationFrame(() => {
-      body.scrollTop = midRow * 14 - body.clientHeight / 2;
-    });
+  if (usedIndices.length === displayPitches.length) {
+    status.textContent = "No empty rows to remove";
+    return;
   }
-  status.textContent = `${usedIndices.length} rows with notes (scrolled to active area). Use Export to get trimmed output.`;
+  const removed = displayPitches.length - usedIndices.length;
+  displayPitches = usedIndices.map((i) => displayPitches[i]);
+  grid = usedIndices.map((i) => grid[i]);
+  renderRoll();
+  status.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""} — ${displayPitches.length} rows remaining. Clear to restore full keyboard.`;
 });
 
 // --- Check solvability ---
 document.getElementById("btn-check")!.addEventListener("click", () => {
   // Find rows with notes
   const usedRows: number[] = [];
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
+  for (let r = 0; r < displayPitches.length; r++) {
     if (grid[r]?.some(Boolean)) usedRows.push(r);
   }
   if (usedRows.length === 0) {
@@ -628,7 +617,7 @@ document.getElementById("btn-check")!.addEventListener("click", () => {
   }
 
   const solution = usedRows.map((i) => grid[i].slice(0, steps));
-  const rowLabels = usedRows.map((i) => ALL_PITCHES[i]);
+  const rowLabels = usedRows.map((i) => displayPitches[i]);
   const colLabels = Array.from({ length: steps }, (_, i) => `Step ${i + 1}`);
 
   const { report } = checkSolvability(solution, rowLabels, colLabels);
@@ -652,7 +641,7 @@ function computeClues(line: boolean[]): number[] {
 document.getElementById("btn-export")!.addEventListener("click", () => {
   // Find used rows only
   const usedRows: number[] = [];
-  for (let r = 0; r < ALL_PITCHES.length; r++) {
+  for (let r = 0; r < displayPitches.length; r++) {
     if (grid[r]?.some(Boolean)) usedRows.push(r);
   }
 
@@ -661,7 +650,7 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
     return;
   }
 
-  const pitches = usedRows.map((i) => ALL_PITCHES[i]);
+  const pitches = usedRows.map((i) => displayPitches[i]);
   const solution = usedRows.map((i) => grid[i].slice(0, steps));
   const filledCount = solution.flat().filter(Boolean).length;
 
