@@ -83,6 +83,30 @@ body {
 .config-group input[type="range"] { accent-color: #5566ff; }
 .config-group input:focus, .config-group select:focus { outline: none; border-color: #5566ff; }
 
+/* MIDI drop zone */
+.midi-drop {
+  padding: 0.6rem 1rem;
+  border: 2px dashed #2a2a4a;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #555;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.midi-drop.dragover {
+  border-color: #5566ff;
+  background: #1a1a3e;
+  color: #8899ff;
+}
+
+.midi-browse {
+  color: #5566ff;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .load-status {
   font-size: 0.75rem;
   color: #5566ff;

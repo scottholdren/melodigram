@@ -1,4 +1,5 @@
 import * as Tone from "tone";
+import { Midi } from "@tonejs/midi";
 import { ALL_SOUNDS } from "./drum-sounds";
 
 // Default track assignments (mix of both kits)
@@ -58,6 +59,12 @@ config.innerHTML = `
   </div>
 `;
 app.appendChild(config);
+
+// MIDI drop zone
+const midiDrop = document.createElement("div");
+midiDrop.className = "midi-drop";
+midiDrop.innerHTML = `<span>Drop a drum MIDI file here or <label class="midi-browse">browse<input type="file" id="midi-file" accept=".mid,.midi" hidden></label></span>`;
+app.appendChild(midiDrop);
 
 const loadStatus = document.createElement("p");
 loadStatus.className = "load-status";
@@ -425,6 +432,149 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
     }, null, 2);
 
   statusEl.textContent = `Exported: ${names.length} sounds × ${steps} steps, ${filled} hits`;
+});
+
+// --- MIDI Import ---
+// General MIDI drum map: MIDI note number -> our sound name (best match)
+const GM_DRUM_MAP: Record<number, string> = {
+  35: "808 Kick",      // Acoustic Bass Drum
+  36: "808 Kick",      // Bass Drum 1
+  37: "808 Rim",       // Side Stick
+  38: "808 Snare",     // Acoustic Snare
+  39: "808 Clap",      // Hand Clap
+  40: "Break Snare",   // Electric Snare
+  41: "808 Lo Tom",    // Low Floor Tom
+  42: "808 Closed Hat", // Closed Hi-Hat
+  43: "808 Lo Tom",    // High Floor Tom
+  44: "808 Closed Hat", // Pedal Hi-Hat
+  45: "808 Hi Tom",    // Low Tom
+  46: "808 Open Hat",  // Open Hi-Hat
+  47: "808 Hi Tom",    // Low-Mid Tom
+  48: "808 Hi Tom",    // Hi-Mid Tom
+  49: "808 Crash",     // Crash Cymbal 1
+  50: "808 Hi Tom",    // High Tom
+  51: "BB Ride",       // Ride Cymbal 1
+  52: "808 Crash",     // Chinese Cymbal
+  53: "BB Ride",       // Ride Bell
+  54: "BB Tom",        // Tambourine
+  55: "808 Crash",     // Splash Cymbal
+  56: "808 Rim",       // Cowbell
+  57: "808 Crash",     // Crash Cymbal 2
+  59: "BB Ride",       // Ride Cymbal 2
+  // Fallbacks for less common percussion
+  60: "808 Hi Tom",    // Hi Bongo
+  61: "808 Lo Tom",    // Low Bongo
+  62: "808 Hi Tom",    // Mute Hi Conga
+  63: "808 Hi Tom",    // Open Hi Conga
+  64: "808 Lo Tom",    // Low Conga
+};
+
+function midiNoteToSoundName(midiNote: number): string {
+  return GM_DRUM_MAP[midiNote] || "808 Kick";
+}
+
+function findSoundIndex(name: string): number {
+  const idx = ALL_SOUNDS.findIndex((s) => s.name === name);
+  return idx >= 0 ? idx : 0;
+}
+
+async function handleMidiFile(file: File) {
+  statusEl.textContent = `Importing ${file.name}...`;
+  try {
+    const buffer = await file.arrayBuffer();
+    const midi = new Midi(buffer);
+    importDrumMidi(midi);
+  } catch (err: any) {
+    statusEl.textContent = `MIDI error: ${err.message || err}`;
+  }
+}
+
+function importDrumMidi(midi: Midi) {
+  // Get BPM from MIDI
+  if (midi.header.tempos.length > 0) {
+    bpm = Math.round(midi.header.tempos[0].bpm);
+    (document.getElementById("cfg-bpm") as HTMLInputElement).value = String(bpm);
+  }
+
+  const secPerStep = (60 / bpm) / 4; // 16th note grid
+
+  // Collect all drum notes across all tracks
+  // Prefer channel 10 (GM drums) but accept any track with percussion-range notes
+  const drumNotes: { midi: number; time: number }[] = [];
+
+  for (const track of midi.tracks) {
+    for (const note of track.notes) {
+      // GM drums are on channel 9 (0-indexed), but many MIDI files
+      // put drums anywhere. Accept notes in the 35-64 range as drums.
+      if (note.midi >= 35 && note.midi <= 81) {
+        drumNotes.push({ midi: note.midi, time: note.time });
+      }
+    }
+  }
+
+  if (drumNotes.length === 0) {
+    // No drum-range notes found, try treating ALL notes as drum hits
+    for (const track of midi.tracks) {
+      for (const note of track.notes) {
+        drumNotes.push({ midi: note.midi, time: note.time });
+      }
+    }
+  }
+
+  if (drumNotes.length === 0) {
+    statusEl.textContent = "No drum notes found in MIDI file";
+    return;
+  }
+
+  // Figure out which unique drum sounds are used
+  const usedSoundNames = [...new Set(drumNotes.map((n) => midiNoteToSoundName(n.midi)))];
+
+  // Determine steps needed
+  const maxTime = Math.max(...drumNotes.map((n) => n.time));
+  const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
+  // Round up to nearest multiple of 4
+  steps = Math.min(128, Math.max(4, Math.ceil(neededSteps / 4) * 4));
+  (document.getElementById("cfg-steps") as HTMLSelectElement).value = String(steps);
+
+  // Set up tracks
+  trackSounds = usedSoundNames.map((name) => findSoundIndex(name));
+  grid = trackSounds.map(() => Array(steps).fill(false));
+
+  // Place notes
+  let placed = 0;
+  for (const note of drumNotes) {
+    const soundName = midiNoteToSoundName(note.midi);
+    const trackIdx = usedSoundNames.indexOf(soundName);
+    if (trackIdx < 0) continue;
+
+    const step = Math.round(note.time / secPerStep);
+    if (step >= 0 && step < steps) {
+      grid[trackIdx][step] = true;
+      placed++;
+    }
+  }
+
+  // Load new samples and render
+  loadAllTrackSamples();
+  renderSequencer();
+  statusEl.textContent = `Imported ${drumNotes.length} hits (${placed} placed) across ${usedSoundNames.length} sounds from ${midi.tracks.length} track(s)`;
+}
+
+// MIDI drag and drop
+midiDrop.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  midiDrop.classList.add("dragover");
+});
+midiDrop.addEventListener("dragleave", () => midiDrop.classList.remove("dragover"));
+midiDrop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  midiDrop.classList.remove("dragover");
+  const file = e.dataTransfer?.files[0];
+  if (file) handleMidiFile(file);
+});
+document.getElementById("midi-file")!.addEventListener("change", (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) handleMidiFile(file);
 });
 
 // --- Init ---
