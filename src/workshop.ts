@@ -1,6 +1,6 @@
 import * as Tone from "tone";
-import { Midi } from "@tonejs/midi";
 import { loadPiano, ensureAudio, isSamplerReady } from "./audio";
+import { importFile, type ImportResult } from "./importers";
 
 // --- Constants ---
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -179,7 +179,7 @@ app.appendChild(config);
 // MIDI import
 const midiDrop = document.createElement("div");
 midiDrop.className = "midi-drop";
-midiDrop.innerHTML = `<span>Drop a .mid file here or <label class="midi-browse">browse<input type="file" id="midi-file" accept=".mid,.midi" hidden></label></span>`;
+midiDrop.innerHTML = `<span>Drop sheet music here — MIDI, MusicXML, ABC notation, or <label class="midi-browse">browse<input type="file" id="midi-file" accept=".mid,.midi,.xml,.musicxml,.mxl,.abc" hidden></label></span>`;
 app.appendChild(midiDrop);
 
 // Piano roll container
@@ -392,55 +392,43 @@ function applyConfig() {
   renderRoll();
 }
 
-// --- MIDI Import ---
-function handleMidiFile(file: File) {
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const midi = new Midi(e.target!.result as ArrayBuffer);
-      importMidi(midi);
-    } catch (err) {
-      status.textContent = `MIDI error: ${err}`;
-    }
-  };
-  reader.readAsArrayBuffer(file);
+// --- Universal sheet music import ---
+async function handleFile(file: File) {
+  status.textContent = `Importing ${file.name}...`;
+  try {
+    const result = await importFile(file);
+    applyImport(result);
+  } catch (err: any) {
+    status.textContent = `Import error: ${err.message || err}`;
+  }
 }
 
-function importMidi(midi: Midi) {
-  // Determine quantize grid in seconds
-  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
-
-  // Find all notes across all tracks
-  const allNotes: { midi: number; time: number; duration: number }[] = [];
-  for (const track of midi.tracks) {
-    for (const note of track.notes) {
-      allNotes.push({ midi: note.midi, time: note.time, duration: note.duration });
-    }
-  }
-
-  if (allNotes.length === 0) {
-    status.textContent = "No notes found in MIDI file";
+function applyImport(result: ImportResult) {
+  if (result.notes.length === 0) {
+    status.textContent = "No notes found in file";
     return;
   }
 
-  // Find time range and auto-set steps
-  const maxTime = Math.max(...allNotes.map((n) => n.time + n.duration));
-  const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
-  steps = Math.max(steps, Math.min(128, neededSteps));
-  (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
-
-  // Set BPM from MIDI if available
-  if (midi.header.tempos.length > 0) {
-    bpm = Math.round(midi.header.tempos[0].bpm);
+  // Update BPM if the file provided one
+  if (result.bpm) {
+    bpm = result.bpm;
     (document.getElementById("cfg-bpm") as HTMLInputElement).value = String(bpm);
   }
+
+  const secPerStep = 60 / bpm / (quantize === "4n" ? 1 : quantize === "8n" ? 2 : 4);
+
+  // Auto-set steps from content
+  const maxTime = Math.max(...result.notes.map((n) => n.time + n.duration));
+  const neededSteps = Math.ceil(maxTime / secPerStep) + 1;
+  steps = Math.max(16, Math.min(128, neededSteps));
+  (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
 
   // Reset grid
   grid = ALL_PITCHES.map(() => Array(steps).fill(false));
 
   // Place notes
   let placed = 0;
-  for (const note of allNotes) {
+  for (const note of result.notes) {
     const pitchName = midiToNote(note.midi);
     const rowIndex = ALL_PITCHES.indexOf(pitchName);
     if (rowIndex < 0) continue;
@@ -454,11 +442,23 @@ function importMidi(midi: Midi) {
     }
   }
 
-  title = midi.name || "Imported MIDI";
+  title = result.title;
   (document.getElementById("cfg-title") as HTMLInputElement).value = title;
 
   renderRoll();
-  status.textContent = `Imported ${allNotes.length} notes (${placed} cells) from ${midi.tracks.length} track(s)`;
+
+  // Scroll to the first note
+  const firstRow = ALL_PITCHES.findIndex((_, r) => grid[r]?.some(Boolean));
+  if (firstRow >= 0) {
+    const body = rollContainer.querySelector(".roll-body") as HTMLElement;
+    if (body) {
+      requestAnimationFrame(() => {
+        body.scrollTop = firstRow * 14 - body.clientHeight / 2;
+      });
+    }
+  }
+
+  status.textContent = `Imported ${result.notes.length} notes (${placed} cells) from ${result.format} — "${result.title}"`;
 }
 
 // Drag and drop
@@ -471,11 +471,11 @@ midiDrop.addEventListener("drop", (e) => {
   e.preventDefault();
   midiDrop.classList.remove("dragover");
   const file = e.dataTransfer?.files[0];
-  if (file) handleMidiFile(file);
+  if (file) handleFile(file);
 });
 document.getElementById("midi-file")!.addEventListener("change", (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
-  if (file) handleMidiFile(file);
+  if (file) handleFile(file);
 });
 
 // --- Playback ---
