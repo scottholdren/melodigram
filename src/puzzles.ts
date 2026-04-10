@@ -8,7 +8,7 @@ export interface Puzzle {
 }
 
 // Ode to Joy — melody: E E F G G F E D (top note at every beat)
-// Harmony notes below the melody. Verified uniquely solvable by brute force.
+// Verified: uniquely solvable AND fully line-solvable (no look-ahead needed).
 export const ODE_TO_JOY: Puzzle = {
   id: "ode-to-joy",
   title: "Can you hear it?",
@@ -19,11 +19,11 @@ export const ODE_TO_JOY: Puzzle = {
     //  1      2      3      4      5      6      7      8
     [false, false, false,  true,  true, false, false, false], // G4
     [false, false,  true, false, false,  true, false, false], // F4
-    [ true,  true, false, false, false, false,  true, false], // E4
-    [false, false,  true,  true, false,  true, false,  true], // D4
-    [false,  true, false, false,  true, false, false, false], // C4
-    [ true,  true, false, false,  true,  true,  true, false], // G3
-    [ true,  true,  true,  true,  true,  true, false, false], // C3
+    [ true,  true, false,  true, false, false,  true, false], // E4
+    [false, false, false, false,  true,  true, false,  true], // D4
+    [false,  true, false,  true, false, false,  true, false], // C4
+    [ true, false,  true,  true, false,  true,  true,  true], // G3
+    [ true,  true,  true,  true,  true, false,  true,  true], // C3
   ],
 };
 
