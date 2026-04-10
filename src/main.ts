@@ -83,6 +83,10 @@ const playBtn = document.createElement("button");
 playBtn.textContent = "Play melody";
 controls.appendChild(playBtn);
 
+const autoBtn = document.createElement("button");
+autoBtn.textContent = "Auto-solve";
+controls.appendChild(autoBtn);
+
 const clearBtn = document.createElement("button");
 clearBtn.textContent = "Clear";
 controls.appendChild(clearBtn);
@@ -366,8 +370,165 @@ async function playMelody(): Promise<void> {
 
 playBtn.addEventListener("click", () => playMelody());
 
+// --- Auto-solve ---
+// Runs the line solver one deduction at a time with visual feedback.
+// Fills music cells with sound, extras silent. When done, triggers win.
+let autoSolving = false;
+
+async function autoSolve() {
+  if (!currentPuzzle || isPlaying || isSolved) return;
+  if (autoSolving) {
+    autoSolving = false;
+    autoBtn.textContent = "Auto-solve";
+    return;
+  }
+
+  autoSolving = true;
+  autoBtn.textContent = "Stop";
+  await ensureAudio(currentPuzzle.bpm);
+
+  const PITCHES = currentPuzzle.pitches;
+  const rows = PITCHES.length;
+  const cols = combinedGrid[0].length;
+
+  // Placement generator for a line
+  function genPlacements(clues: number[], len: number): boolean[][] {
+    const out: boolean[][] = [];
+    function place(ci: number, pos: number, cur: boolean[]) {
+      if (ci === clues.length) {
+        const line = [...cur];
+        while (line.length < len) line.push(false);
+        out.push(line);
+        return;
+      }
+      const cl = clues[ci];
+      const rem = clues.slice(ci + 1).reduce((a, b) => a + b + 1, 0);
+      const mx = len - cl - rem;
+      for (let s = pos; s <= mx; s++) {
+        const line = [...cur];
+        while (line.length < s) line.push(false);
+        for (let i = 0; i < cl; i++) line.push(true);
+        if (ci < clues.length - 1) line.push(false);
+        place(ci + 1, line.length, line);
+      }
+    }
+    if (!clues.length) out.push(Array(len).fill(false));
+    else place(0, 0, []);
+    return out;
+  }
+
+  function filterLine(ps: boolean[][], known: number[]): boolean[][] {
+    return ps.filter((p) => p.every((v, i) => known[i] === 0 || v === (known[i] === 1)));
+  }
+
+  function deduceLine(ps: boolean[][], len: number): number[] {
+    const r = Array(len).fill(0);
+    if (!ps.length) return r;
+    for (let i = 0; i < len; i++) {
+      if (ps.every((p) => p[i])) r[i] = 1;
+      else if (ps.every((p) => !p[i])) r[i] = -1;
+    }
+    return r;
+  }
+
+  // Working state: 0=unknown, 1=filled, -1=empty. Seed from current player fills.
+  const state: number[][] = Array.from({ length: rows }, (_, r) =>
+    Array.from({ length: cols }, (_, c) =>
+      grid[r][c] === "filled" ? 1 : grid[r][c] === "marked" ? -1 : 0
+    )
+  );
+
+  const rowPlacements = rowClues.map((c) => genPlacements(c, cols));
+  const colPlacements = colClues.map((c) => genPlacements(c, rows));
+
+  const delay = 80;
+  const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function applyCell(r: number, c: number, val: 1 | -1) {
+    if (!currentPuzzle) return;
+    const cell = cells[r]?.[c];
+    if (!cell) return;
+    if (val === 1) {
+      grid[r][c] = "filled";
+      cell.classList.add("filled");
+      cell.classList.remove("marked");
+      cell.textContent = "";
+      cell.style.backgroundColor = "#5566ff";
+      cell.style.boxShadow = "0 0 10px #5566ff88";
+      // Play note only for music cells
+      if (isMusic(currentPuzzle, r, c)) {
+        playNote(PITCHES[r]);
+      }
+    } else {
+      grid[r][c] = "marked";
+      cell.classList.add("marked");
+      cell.classList.remove("filled");
+      cell.style.backgroundColor = "";
+      cell.style.boxShadow = "";
+      cell.textContent = "X";
+    }
+  }
+
+  let changed = true;
+  let iter = 0;
+  while (changed && iter < 100 && autoSolving) {
+    changed = false;
+    iter++;
+
+    for (let r = 0; r < rows && autoSolving; r++) {
+      const valid = filterLine(rowPlacements[r], state[r]);
+      rowPlacements[r] = valid;
+      if (!valid.length) { autoSolving = false; break; }
+      const deduced = deduceLine(valid, cols);
+      for (let c = 0; c < cols; c++) {
+        if (state[r][c] === 0 && deduced[c] !== 0) {
+          state[r][c] = deduced[c];
+          applyCell(r, c, deduced[c] as 1 | -1);
+          await sleepMs(delay);
+          if (!autoSolving) break;
+          changed = true;
+        }
+      }
+    }
+    if (!autoSolving) break;
+
+    for (let c = 0; c < cols && autoSolving; c++) {
+      const known: number[] = [];
+      for (let r = 0; r < rows; r++) known.push(state[r][c]);
+      const valid = filterLine(colPlacements[c], known);
+      colPlacements[c] = valid;
+      if (!valid.length) { autoSolving = false; break; }
+      const deduced = deduceLine(valid, rows);
+      for (let r = 0; r < rows; r++) {
+        if (state[r][c] === 0 && deduced[r] !== 0) {
+          state[r][c] = deduced[r];
+          applyCell(r, c, deduced[r] as 1 | -1);
+          await sleepMs(delay);
+          if (!autoSolving) break;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  autoSolving = false;
+  autoBtn.textContent = "Auto-solve";
+
+  if (!isSolved && checkSolved()) {
+    isSolved = true;
+    subtitle.textContent = `${currentPuzzle.title}${currentPuzzle.composer ? " — " + currentPuzzle.composer : ""}`;
+    hint.textContent = "Solved!";
+    revealCells();
+    await playMelody();
+  }
+}
+
+autoBtn.addEventListener("click", () => autoSolve());
+
 clearBtn.addEventListener("click", () => {
   if (isPlaying || !currentPuzzle) return;
+  autoSolving = false;
+  autoBtn.textContent = "Auto-solve";
   isSolved = false;
   subtitle.textContent = "Fill in the grid using the clues";
   hint.textContent = "Click: fill · Again: mark X · Again: clear";
