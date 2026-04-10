@@ -574,22 +574,68 @@ export async function makePlayable(
     return { extras: [], iterations: 0 };
   }
 
-  // List of all cells that could be extras (currently empty)
-  const emptyCells: [number, number][] = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (!musicGrid[r][c]) emptyCells.push([r, c]);
-    }
+  // Score each empty cell by how much it would MERGE or EXTEND existing runs
+  // when added. Cells that fill gaps or extend filled runs get higher scores
+  // because they produce longer, more constrained clues (easier to solve).
+  function scoreCell(grid: boolean[][], r: number, c: number): number {
+    if (grid[r][c]) return -1;
+    let score = 0;
+    // Row neighbors
+    const leftRow = c > 0 && grid[r][c - 1];
+    const rightRow = c < cols - 1 && grid[r][c + 1];
+    if (leftRow && rightRow) score += 10; // fills a gap — merges two runs
+    else if (leftRow || rightRow) score += 4; // extends a run
+    // Column neighbors
+    const topCol = r > 0 && grid[r - 1][c];
+    const bottomCol = r < rows - 1 && grid[r + 1][c];
+    if (topCol && bottomCol) score += 10;
+    else if (topCol || bottomCol) score += 4;
+    return score;
   }
 
-  // Try adding random extras. Binary search on count:
-  // - Start with a small number and increase
-  // - For each count, try several random patterns
+  // Build the list of candidate cells, sorted by "merging score" descending
+  function buildCandidatePool(grid: boolean[][]): [number, number, number][] {
+    const pool: [number, number, number][] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!grid[r][c]) {
+          pool.push([r, c, scoreCell(grid, r, c)]);
+        }
+      }
+    }
+    pool.sort((a, b) => b[2] - a[2]);
+    return pool;
+  }
+
+  // Pick a weighted-random cell from the pool (higher scores preferred)
+  function pickWeighted(pool: [number, number, number][]): [number, number] | null {
+    if (pool.length === 0) return null;
+    // Use squared scores + small base so even zero-score cells can be picked
+    let totalWeight = 0;
+    const weights: number[] = [];
+    for (const [, , s] of pool) {
+      const w = (s + 1) * (s + 1); // bias toward high scores
+      weights.push(w);
+      totalWeight += w;
+    }
+    let pick = Math.random() * totalWeight;
+    for (let i = 0; i < pool.length; i++) {
+      pick -= weights[i];
+      if (pick <= 0) {
+        const [r, c] = pool[i];
+        return [r, c];
+      }
+    }
+    return [pool[0][0], pool[0][1]];
+  }
+
   let bestExtras: [number, number][] | null = null;
   let round = 0;
-  const maxExtrasCount = Math.min(emptyCells.length, rows * cols); // upper bound
+  const totalEmpty = rows * cols - musicGrid.flat().filter(Boolean).length;
+  const maxExtrasCount = Math.min(totalEmpty, rows * cols);
 
-  // Phase 1: try small numbers of extras first, then grow
+  // Phase 1: try small numbers of extras first, growing as needed.
+  // Each attempt biases toward cells that extend/merge existing runs.
   for (let targetExtras = 1; targetExtras <= maxExtrasCount && !bestExtras; ) {
     const attemptsPerSize = Math.max(20, Math.floor(100 / Math.sqrt(targetExtras)));
     for (let attempt = 0; attempt < attemptsPerSize; attempt++) {
@@ -599,25 +645,25 @@ export async function makePlayable(
         await yieldUI();
       }
 
-      // Shuffle empty cells, pick the first `targetExtras` as candidates
-      const shuffled = [...emptyCells];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      // Build candidate list relative to a working grid so merging scores update
+      const working = musicGrid.map((row) => [...row]);
+      const candidate: [number, number][] = [];
+      for (let i = 0; i < targetExtras; i++) {
+        const pool = buildCandidatePool(working);
+        const pick = pickWeighted(pool);
+        if (!pick) break;
+        candidate.push(pick);
+        working[pick[0]][pick[1]] = true;
       }
-      const candidate = shuffled.slice(0, targetExtras);
 
-      // Build combined grid
-      const combined = musicGrid.map((row) => [...row]);
-      for (const [r, c] of candidate) combined[r][c] = true;
+      if (candidate.length === 0) break;
 
-      if (await isLineSolvable(combined)) {
+      if (await isLineSolvable(working)) {
         bestExtras = candidate;
         break;
       }
     }
 
-    // Grow target size exponentially, then linearly
     if (!bestExtras) {
       targetExtras = Math.max(targetExtras + 1, Math.ceil(targetExtras * 1.5));
     }
