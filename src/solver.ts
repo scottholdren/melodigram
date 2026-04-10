@@ -532,10 +532,13 @@ export async function makePlayable(
     // Sort: highest info gain first
     candidates.sort((a, b) => b.score - a.score);
 
-    // Reveal 1 cell per round (precise, avoids over-revealing)
-    const best = candidates[0];
-    givens.push([best.r, best.c]);
-    givenSet.add(`${best.r},${best.c}`);
+    // Reveal a batch per round: ~1% of total cells, minimum 3
+    const batchSize = Math.max(3, Math.ceil(rows * cols * 0.01));
+    const toReveal = candidates.slice(0, Math.min(batchSize, candidates.length));
+    for (const { r, c } of toReveal) {
+      givens.push([r, c]);
+      givenSet.add(`${r},${c}`);
+    }
   }
 
   onProgress?.(`Done: ${givens.length} givens needed`);
