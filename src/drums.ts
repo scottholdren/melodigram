@@ -412,8 +412,7 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
 });
 
 // --- Check solvability ---
-document.getElementById("btn-check")!.addEventListener("click", () => {
-  // Get only rows with hits
+document.getElementById("btn-check")!.addEventListener("click", async () => {
   const usedRows: number[] = [];
   for (let r = 0; r < grid.length; r++) {
     if (grid[r]?.some(Boolean)) usedRows.push(r);
@@ -427,9 +426,14 @@ document.getElementById("btn-check")!.addEventListener("click", () => {
   const rowLabels = usedRows.map((i) => ALL_SOUNDS[trackSounds[i]].name);
   const colLabels = Array.from({ length: steps }, (_, i) => `Beat ${i + 1}`);
 
-  const { report } = checkSolvability(solution, rowLabels, colLabels);
-
   exportOutput.style.display = "block";
+  exportOutput.textContent = "Checking...";
+  statusEl.textContent = "Checking solvability...";
+
+  const { report } = await checkSolvability(solution, rowLabels, colLabels, (msg) => {
+    exportOutput.textContent = msg;
+  });
+
   exportOutput.textContent = report;
   statusEl.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
 });

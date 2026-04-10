@@ -1,14 +1,19 @@
 /**
  * Nonogram line solver using constraint propagation.
- * Returns solve status plus diagnostics on problematic rows/columns.
+ * Async with progress callback. Caps placement enumeration to prevent browser hang.
  */
 
 type Cell = 0 | 1 | -1; // 0=unknown, 1=filled, -1=empty
 
-function generatePlacements(clues: number[], length: number): boolean[][] {
+const MAX_PLACEMENTS = 5000; // per line — bail if exceeded
+
+function generatePlacements(clues: number[], length: number): { placements: boolean[][]; capped: boolean } {
   const results: boolean[][] = [];
+  let capped = false;
 
   function place(clueIdx: number, pos: number, current: boolean[]): void {
+    if (results.length >= MAX_PLACEMENTS) { capped = true; return; }
+
     if (clueIdx === clues.length) {
       const line = [...current];
       while (line.length < length) line.push(false);
@@ -22,6 +27,7 @@ function generatePlacements(clues: number[], length: number): boolean[][] {
     const maxStart = length - clueLen - minRemaining;
 
     for (let start = pos; start <= maxStart; start++) {
+      if (results.length >= MAX_PLACEMENTS) { capped = true; return; }
       const line = [...current];
       while (line.length < start) line.push(false);
       for (let i = 0; i < clueLen; i++) line.push(true);
@@ -36,7 +42,7 @@ function generatePlacements(clues: number[], length: number): boolean[][] {
     place(0, 0, []);
   }
 
-  return results;
+  return { placements: results, capped };
 }
 
 function filterPlacements(placements: boolean[][], known: Cell[]): boolean[][] {
@@ -65,8 +71,9 @@ export interface LineDiag {
   index: number;
   type: "row" | "col";
   clue: number[];
-  possiblePlacements: number; // how many valid placements remain
-  unknownCells: number; // how many cells still undetermined
+  possiblePlacements: number;
+  unknownCells: number;
+  capped: boolean; // true = too many placements, gave up counting
 }
 
 export interface SolverResult {
@@ -75,24 +82,47 @@ export interface SolverResult {
   iterations: number;
   totalCells: number;
   solvedCells: number;
-  /** Rows/cols that still have unknown cells, sorted by most problematic first */
   problematic: LineDiag[];
-  /** true if solver hit a contradiction (impossible clue combination) */
   contradiction: boolean;
 }
 
-export function solve(
+export type ProgressCallback = (msg: string) => void;
+
+/** Yield control to the browser so UI stays responsive */
+function yieldUI(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
+export async function solveAsync(
   rows: number,
   cols: number,
   rowClues: number[][],
-  colClues: number[][]
-): SolverResult {
+  colClues: number[][],
+  onProgress?: ProgressCallback
+): Promise<SolverResult> {
   const grid: Cell[][] = Array.from({ length: rows }, () =>
     Array(cols).fill(0)
   );
 
-  const rowPlacements = rowClues.map((clue) => generatePlacements(clue, cols));
-  const colPlacements = colClues.map((clue) => generatePlacements(clue, rows));
+  onProgress?.(`Generating placements for ${rows} rows...`);
+  await yieldUI();
+
+  // Pre-generate placements with cap
+  const rowData = rowClues.map((clue, i) => {
+    const r = generatePlacements(clue, cols);
+    return { placements: r.placements, capped: r.capped };
+  });
+
+  onProgress?.(`Generating placements for ${cols} columns...`);
+  await yieldUI();
+
+  const colData = colClues.map((clue) => {
+    const r = generatePlacements(clue, rows);
+    return { placements: r.placements, capped: r.capped };
+  });
+
+  const cappedRows = rowData.filter((d) => d.capped).length;
+  const cappedCols = colData.filter((d) => d.capped).length;
 
   let changed = true;
   let iterations = 0;
@@ -102,13 +132,15 @@ export function solve(
   while (changed && iterations < maxIterations) {
     changed = false;
     iterations++;
+    onProgress?.(`Solving... iteration ${iterations} (${countSolved(grid, rows, cols)} / ${rows * cols} cells)`);
+    await yieldUI();
 
     for (let r = 0; r < rows; r++) {
       const known = grid[r];
-      const valid = filterPlacements(rowPlacements[r], known);
-      rowPlacements[r] = valid;
+      const valid = filterPlacements(rowData[r].placements, known);
+      rowData[r].placements = valid;
 
-      if (valid.length === 0) {
+      if (valid.length === 0 && !rowData[r].capped) {
         contradiction = true;
         break;
       }
@@ -128,10 +160,10 @@ export function solve(
       const known: Cell[] = [];
       for (let r = 0; r < rows; r++) known.push(grid[r][c]);
 
-      const valid = filterPlacements(colPlacements[c], known);
-      colPlacements[c] = valid;
+      const valid = filterPlacements(colData[c].placements, known);
+      colData[c].placements = valid;
 
-      if (valid.length === 0) {
+      if (valid.length === 0 && !colData[c].capped) {
         contradiction = true;
         break;
       }
@@ -149,55 +181,122 @@ export function solve(
   }
 
   const totalCells = rows * cols;
-  let solvedCells = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (grid[r][c] !== 0) solvedCells++;
-    }
-  }
+  const solvedCells = countSolved(grid, rows, cols);
 
-  // Build diagnostics for unsolved lines
   const problematic: LineDiag[] = [];
 
   for (let r = 0; r < rows; r++) {
     const unknowns = grid[r].filter((c) => c === 0).length;
     if (unknowns > 0) {
       problematic.push({
-        index: r,
-        type: "row",
-        clue: rowClues[r],
-        possiblePlacements: rowPlacements[r].length,
-        unknownCells: unknowns,
+        index: r, type: "row", clue: rowClues[r],
+        possiblePlacements: rowData[r].placements.length,
+        unknownCells: unknowns, capped: rowData[r].capped,
       });
     }
   }
 
   for (let c = 0; c < cols; c++) {
     let unknowns = 0;
-    for (let r = 0; r < rows; r++) {
-      if (grid[r][c] === 0) unknowns++;
-    }
+    for (let r = 0; r < rows; r++) { if (grid[r][c] === 0) unknowns++; }
     if (unknowns > 0) {
       problematic.push({
-        index: c,
-        type: "col",
-        clue: colClues[c],
-        possiblePlacements: colPlacements[c].length,
-        unknownCells: unknowns,
+        index: c, type: "col", clue: colClues[c],
+        possiblePlacements: colData[c].placements.length,
+        unknownCells: unknowns, capped: colData[c].capped,
       });
     }
   }
 
-  // Sort: most possible placements = most ambiguous = most problematic
   problematic.sort((a, b) => b.possiblePlacements - a.possiblePlacements);
 
   const solved = solvedCells === totalCells && !contradiction;
   return { solved, grid, iterations, totalCells, solvedCells, problematic, contradiction };
 }
 
-/**
- * Compute nonogram clues from a boolean line.
- */
+function countSolved(grid: Cell[][], rows: number, cols: number): number {
+  let n = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (grid[r][c] !== 0) n++;
+    }
+  }
+  return n;
+}
+
+/** Synchronous version for small puzzles (game page) */
+export function solve(
+  rows: number,
+  cols: number,
+  rowClues: number[][],
+  colClues: number[][]
+): SolverResult {
+  const grid: Cell[][] = Array.from({ length: rows }, () =>
+    Array(cols).fill(0)
+  );
+
+  const rowData = rowClues.map((clue) => generatePlacements(clue, cols));
+  const colData = colClues.map((clue) => generatePlacements(clue, rows));
+
+  let changed = true;
+  let iterations = 0;
+  const maxIterations = 100;
+  let contradiction = false;
+
+  while (changed && iterations < maxIterations) {
+    changed = false;
+    iterations++;
+
+    for (let r = 0; r < rows; r++) {
+      const known = grid[r];
+      const valid = filterPlacements(rowData[r].placements, known);
+      rowData[r].placements = valid;
+      if (valid.length === 0 && !rowData[r].capped) { contradiction = true; break; }
+      const deduced = deduceLine(valid, cols);
+      for (let c = 0; c < cols; c++) {
+        if (grid[r][c] === 0 && deduced[c] !== 0) { grid[r][c] = deduced[c]; changed = true; }
+      }
+    }
+    if (contradiction) break;
+
+    for (let c = 0; c < cols; c++) {
+      const known: Cell[] = [];
+      for (let r = 0; r < rows; r++) known.push(grid[r][c]);
+      const valid = filterPlacements(colData[c].placements, known);
+      colData[c].placements = valid;
+      if (valid.length === 0 && !colData[c].capped) { contradiction = true; break; }
+      const deduced = deduceLine(valid, rows);
+      for (let r = 0; r < rows; r++) {
+        if (grid[r][c] === 0 && deduced[r] !== 0) { grid[r][c] = deduced[r]; changed = true; }
+      }
+    }
+    if (contradiction) break;
+  }
+
+  const totalCells = rows * cols;
+  const solvedCells = countSolved(grid, rows, cols);
+  const problematic: LineDiag[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    const unknowns = grid[r].filter((c) => c === 0).length;
+    if (unknowns > 0) {
+      problematic.push({ index: r, type: "row", clue: rowClues[r],
+        possiblePlacements: rowData[r].placements.length, unknownCells: unknowns, capped: rowData[r].capped });
+    }
+  }
+  for (let c = 0; c < cols; c++) {
+    let unknowns = 0;
+    for (let r = 0; r < rows; r++) { if (grid[r][c] === 0) unknowns++; }
+    if (unknowns > 0) {
+      problematic.push({ index: c, type: "col", clue: colClues[c],
+        possiblePlacements: colData[c].placements.length, unknownCells: unknowns, capped: colData[c].capped });
+    }
+  }
+  problematic.sort((a, b) => b.possiblePlacements - a.possiblePlacements);
+
+  return { solved: solvedCells === totalCells && !contradiction, grid, iterations, totalCells, solvedCells, problematic, contradiction };
+}
+
 export function computeClues(line: boolean[]): number[] {
   const clues: number[] = [];
   let run = 0;
@@ -208,15 +307,12 @@ export function computeClues(line: boolean[]): number[] {
   return clues;
 }
 
-/**
- * Run full solvability check on a grid (solution).
- * Returns a human-readable report.
- */
-export function checkSolvability(
+export async function checkSolvability(
   solution: boolean[][],
   rowLabels?: string[],
-  colLabels?: string[]
-): { result: SolverResult; report: string } {
+  colLabels?: string[],
+  onProgress?: ProgressCallback
+): Promise<{ result: SolverResult; report: string }> {
   const rows = solution.length;
   const cols = solution[0]?.length || 0;
 
@@ -226,24 +322,23 @@ export function checkSolvability(
     colClues.push(computeClues(solution.map((row) => row[c])));
   }
 
-  const result = solve(rows, cols, rowClues, colClues);
+  const result = await solveAsync(rows, cols, rowClues, colClues, onProgress);
   const pct = Math.round((result.solvedCells / result.totalCells) * 100);
 
   let report = "";
 
   if (result.contradiction) {
-    report += "CONTRADICTION — the clues are internally inconsistent (bug in solver or clue generation).\n\n";
+    report += "CONTRADICTION — the clues are internally inconsistent.\n\n";
   }
 
   if (result.solved) {
-    report += `SOLVABLE — the puzzle is uniquely solvable by logic alone.\n`;
+    report += `SOLVABLE — uniquely solvable by logic alone.\n`;
     report += `${result.totalCells} cells resolved in ${result.iterations} iterations.\n`;
   } else {
     report += `NOT SOLVABLE by line logic alone.\n`;
     report += `${result.solvedCells}/${result.totalCells} cells resolved (${pct}%), ${result.totalCells - result.solvedCells} ambiguous.\n`;
-    report += `Solved in ${result.iterations} iterations before getting stuck.\n\n`;
+    report += `Ran ${result.iterations} iterations before getting stuck.\n\n`;
 
-    // Group problematic lines
     const probRows = result.problematic.filter((p) => p.type === "row");
     const probCols = result.problematic.filter((p) => p.type === "col");
 
@@ -251,7 +346,8 @@ export function checkSolvability(
       report += `Problem rows (${probRows.length}):\n`;
       for (const p of probRows) {
         const label = rowLabels ? rowLabels[p.index] : `Row ${p.index + 1}`;
-        report += `  ${label}: clue [${p.clue.join(",")}] — ${p.possiblePlacements} possible placements, ${p.unknownCells} unknown cells\n`;
+        const cappedNote = p.capped ? " (TOO MANY — capped)" : "";
+        report += `  ${label}: clue [${p.clue.join(",")}] — ${p.possiblePlacements} placements${cappedNote}, ${p.unknownCells} unknown\n`;
       }
       report += "\n";
     }
@@ -260,15 +356,14 @@ export function checkSolvability(
       report += `Problem columns (${probCols.length}):\n`;
       for (const p of probCols) {
         const label = colLabels ? colLabels[p.index] : `Col ${p.index + 1}`;
-        report += `  ${label}: clue [${p.clue.join(",")}] — ${p.possiblePlacements} possible placements, ${p.unknownCells} unknown cells\n`;
+        const cappedNote = p.capped ? " (TOO MANY — capped)" : "";
+        report += `  ${label}: clue [${p.clue.join(",")}] — ${p.possiblePlacements} placements${cappedNote}, ${p.unknownCells} unknown\n`;
       }
       report += "\n";
     }
 
-    // Suggestions
-    report += "Tips to improve solvability:\n";
+    report += "Tips:\n";
 
-    // Find duplicate clues
     const rowClueStrs = rowClues.map((c) => c.join(","));
     const colClueStrs = colClues.map((c) => c.join(","));
     const dupRows = rowClueStrs.filter((c, i) => rowClueStrs.indexOf(c) !== i);
@@ -279,7 +374,7 @@ export function checkSolvability(
       for (const dup of unique) {
         const indices = rowClueStrs.map((c, i) => c === dup ? i : -1).filter((i) => i >= 0);
         const labels = indices.map((i) => rowLabels ? rowLabels[i] : `Row ${i + 1}`);
-        report += `  - Duplicate row clue [${dup}] in: ${labels.join(", ")} — these rows are interchangeable\n`;
+        report += `  - Duplicate row clue [${dup}] in: ${labels.join(", ")}\n`;
       }
     }
 
@@ -288,19 +383,18 @@ export function checkSolvability(
       for (const dup of unique) {
         const indices = colClueStrs.map((c, i) => c === dup ? i : -1).filter((i) => i >= 0);
         const labels = indices.map((i) => colLabels ? colLabels[i] : `Col ${i + 1}`);
-        report += `  - Duplicate col clue [${dup}] in: ${labels.join(", ")} — these columns are interchangeable\n`;
+        report += `  - Duplicate col clue [${dup}] in: ${labels.join(", ")}\n`;
       }
     }
 
-    // Find very short clues (low constraint)
-    const weakLines = result.problematic.filter((p) => p.possiblePlacements > 10);
-    if (weakLines.length > 0) {
-      report += `  - ${weakLines.length} lines have 10+ possible placements — add more notes to constrain them\n`;
+    const cappedLines = result.problematic.filter((p) => p.capped);
+    if (cappedLines.length > 0) {
+      report += `  - ${cappedLines.length} lines have too many possibilities (${MAX_PLACEMENTS}+ placements) — these need more constraints\n`;
     }
 
     const fillRate = solution.flat().filter(Boolean).length / result.totalCells;
     if (fillRate < 0.4) {
-      report += `  - Fill rate is ${Math.round(fillRate * 100)}% — puzzles under 40% are rarely solvable. Add more notes.\n`;
+      report += `  - Fill rate is ${Math.round(fillRate * 100)}% — aim for 40%+ for solvable puzzles\n`;
     }
   }
 

@@ -605,8 +605,7 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
 });
 
 // --- Check solvability ---
-document.getElementById("btn-check")!.addEventListener("click", () => {
-  // Find rows with notes
+document.getElementById("btn-check")!.addEventListener("click", async () => {
   const usedRows: number[] = [];
   for (let r = 0; r < displayPitches.length; r++) {
     if (grid[r]?.some(Boolean)) usedRows.push(r);
@@ -620,9 +619,14 @@ document.getElementById("btn-check")!.addEventListener("click", () => {
   const rowLabels = usedRows.map((i) => displayPitches[i]);
   const colLabels = Array.from({ length: steps }, (_, i) => `Step ${i + 1}`);
 
-  const { report } = checkSolvability(solution, rowLabels, colLabels);
-
   exportOutput.style.display = "block";
+  exportOutput.textContent = "Checking...";
+  status.textContent = "Checking solvability...";
+
+  const { report } = await checkSolvability(solution, rowLabels, colLabels, (msg) => {
+    exportOutput.textContent = msg;
+  });
+
   exportOutput.textContent = report;
   status.textContent = report.startsWith("SOLVABLE") ? "Puzzle is solvable!" : "Not solvable yet — see details below";
 });
