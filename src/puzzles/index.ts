@@ -3,7 +3,7 @@ import twinkle from "./twinkle-twinkle";
 import mary from "./mary-had-a-little-lamb";
 import the_entertainer from "./the-entertainer";
 
-export { type Puzzle, combined, isMusic, isExtra } from "./types";
+export { type Puzzle, type RowSound, combined, isMusic, isExtra, deriveAttacks, getAttacks, pianoRow, drumRow } from "./types";
 
 // Puzzle library. Order here determines level select order.
 // To add a puzzle: drop a .ts file in this folder and import it here.

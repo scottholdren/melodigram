@@ -18,6 +18,14 @@ export interface Puzzle {
   rows: RowSound[];
   music: boolean[][];
   extras: boolean[][];
+  /**
+   * Optional: which music cells start a new note attack.
+   * If omitted, the player computes attacks from runs — first cell of every
+   * consecutive run of music cells is treated as a new attack, so held notes
+   * work but trills merge into single sustained notes. Set this explicitly to
+   * preserve rapid repeated notes from MIDI imports.
+   */
+  attacks?: boolean[][];
 }
 
 export interface RowSound {
@@ -54,4 +62,24 @@ export function pianoRow(pitch: string): RowSound {
 /** Helper: build a drum row from a sound name */
 export function drumRow(soundName: string): RowSound {
   return { label: soundName, instrument: "drums", drumSound: soundName };
+}
+
+/**
+ * Compute default attack markers from a music grid: the first cell of every
+ * consecutive run of filled cells is an attack. Used when a puzzle doesn't
+ * ship with explicit attack data.
+ */
+export function deriveAttacks(music: boolean[][]): boolean[][] {
+  return music.map((row) => {
+    const out = Array(row.length).fill(false);
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] && (c === 0 || !row[c - 1])) out[c] = true;
+    }
+    return out;
+  });
+}
+
+/** Get the attack grid for a puzzle, deriving from music if not present. */
+export function getAttacks(p: Puzzle): boolean[][] {
+  return p.attacks || deriveAttacks(p.music);
 }

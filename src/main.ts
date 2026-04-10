@@ -1,5 +1,5 @@
 import { ensureAudio, getTransport } from "./audio";
-import { PUZZLES, combined, isMusic, type Puzzle } from "./puzzles";
+import { PUZZLES, combined, isMusic, getAttacks, type Puzzle } from "./puzzles";
 import {
   preloadInstruments, playRow, scheduleRow, getRowColor as getInstrColor,
   type InstrumentKey,
@@ -350,13 +350,20 @@ async function playMelody(): Promise<void> {
   transport.cancel();
   transport.position = 0;
 
-  // Schedule only music cells
+  // Schedule music cells using attack markers: each attack starts a new
+  // note that sustains until the next attack or the next empty cell.
+  const attacks = getAttacks(currentPuzzle);
   for (let r = 0; r < ROWS.length; r++) {
     let c = 0;
     while (c < BEATS) {
-      if (currentPuzzle.music[r][c]) {
+      if (currentPuzzle.music[r][c] && attacks[r][c]) {
         let len = 1;
-        while (c + len < BEATS && currentPuzzle.music[r][c + len]) len++;
+        // Continue while cells are still music AND not a new attack
+        while (
+          c + len < BEATS &&
+          currentPuzzle.music[r][c + len] &&
+          !attacks[r][c + len]
+        ) len++;
         schedulePuzzleRow(currentPuzzle, r, c * secPerBeat, len * secPerBeat * 0.9);
         c += len;
       } else {

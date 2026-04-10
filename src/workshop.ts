@@ -247,6 +247,24 @@ function quantizeDivisor(q: QuantizeValue): number {
 }
 let title = "My Beat";
 let grid: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
+// attacks[r][c] = true means a new note starts at this cell. Parallel to grid.
+// Without this we'd merge adjacent same-row cells into one held note, losing trills.
+let attacks: boolean[][] = displayPitches.map(() => Array(steps).fill(false));
+
+function resetAttacksFromGrid() {
+  attacks = grid.map((row) => {
+    const out = Array(row.length).fill(false);
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] && (c === 0 || !row[c - 1])) out[c] = true;
+    }
+    return out;
+  });
+}
+
+function freshGrid(rows: number, cols: number) {
+  grid = Array.from({ length: rows }, () => Array(cols).fill(false));
+  attacks = Array.from({ length: rows }, () => Array(cols).fill(false));
+}
 let seqCells: HTMLDivElement[][] = [];
 let isPlaying = false;
 let looping = false;
@@ -500,7 +518,10 @@ function renderRoll() {
       cell.addEventListener("click", async () => {
         await ensureAudio(bpm);
         if (!grid[ri]) grid[ri] = Array(steps).fill(false);
+        if (!attacks[ri]) attacks[ri] = Array(steps).fill(false);
         grid[ri][ci] = !grid[ri][ci];
+        // Manual click = new attack when filling, clear when emptying
+        attacks[ri][ci] = grid[ri][ci];
         if (grid[ri][ci]) {
           const cls = thisRow.pitch ? noteColorClass(thisRow.pitch) : "note-C";
           cell.classList.add("active", cls);
@@ -555,6 +576,11 @@ function applyConfig() {
   // Resize grid columns if steps changed
   if (steps !== oldSteps) {
     grid = grid.map((row) => {
+      const newRow = Array(steps).fill(false);
+      for (let c = 0; c < Math.min(row.length, steps); c++) newRow[c] = row[c];
+      return newRow;
+    });
+    attacks = attacks.map((row) => {
       const newRow = Array(steps).fill(false);
       for (let c = 0; c < Math.min(row.length, steps); c++) newRow[c] = row[c];
       return newRow;
@@ -814,13 +840,14 @@ function applyImport(result: ImportResult) {
     if (newRows.length === 0) {
       setRows(ALL_PITCHES.map(pianoRow));
       rowTrackIndex = workRows.map(() => -1);
-      grid = workRows.map(() => Array(steps).fill(false));
+      freshGrid(workRows.length, steps);
     } else {
       setRows(newRows);
       rowTrackIndex = newRowTracks;
-      grid = workRows.map(() => Array(steps).fill(false));
+      freshGrid(workRows.length, steps);
 
-      // Place notes using per-track data — no more pitch-range guessing
+      // Place notes using per-track data — no more pitch-range guessing.
+      // Each note's first step is an attack; subsequent steps are sustain.
       for (const t of result.tracks) {
         if (!t.notes) continue;
         for (const note of t.notes) {
@@ -833,6 +860,12 @@ function applyImport(result: ImportResult) {
               grid[rowIdx][s] = true;
               placed++;
             }
+          }
+          // Mark the first step of this note as an attack (even if the cell
+          // was already filled by a sustained previous note — rapid repeats
+          // on the same pitch need to re-trigger).
+          if (startStep >= 0 && startStep < steps) {
+            attacks[rowIdx][startStep] = true;
           }
         }
       }
@@ -853,7 +886,7 @@ function applyImport(result: ImportResult) {
     rowTrackIndex = workRows.map(() => -1);
     currentTracks = [];
     mutedTracks = new Set();
-    grid = workRows.map(() => Array(steps).fill(false));
+    freshGrid(workRows.length, steps);
     renderTrackPanel();
 
     for (const note of result.notes) {
@@ -866,6 +899,9 @@ function applyImport(result: ImportResult) {
       for (let s = startStep; s < startStep + durationSteps && s < steps; s++) {
         grid[rowIndex][s] = true;
         placed++;
+      }
+      if (startStep >= 0 && startStep < steps) {
+        attacks[rowIndex][startStep] = true;
       }
     }
   }
@@ -943,16 +979,23 @@ async function playOnce(): Promise<void> {
   transport.cancel();
   transport.position = 0;
 
-  // Schedule notes with duration awareness, using each row's instrument
+  // Schedule notes using attack markers. Each attack starts a new note that
+  // sustains until the next attack or an empty cell. This preserves rapid
+  // repeated notes (trills) that would otherwise merge into one held note.
   for (let r = 0; r < workRows.length; r++) {
     if (!grid[r]) continue;
     if (isRowMuted(r)) continue;
     const rowSound = workRows[r];
+    const rowAttacks = attacks[r] || [];
     let c = 0;
     while (c < steps) {
-      if (grid[r][c]) {
+      if (grid[r][c] && rowAttacks[c]) {
         let len = 1;
-        while (c + len < steps && grid[r][c + len]) len++;
+        while (
+          c + len < steps &&
+          grid[r][c + len] &&
+          !rowAttacks[c + len]
+        ) len++;
         const startTime = c * secPerStep;
         const dur = len * secPerStep * 0.85;
         scheduleInstrumentRow(
@@ -1029,7 +1072,7 @@ document.getElementById("btn-clear")!.addEventListener("click", () => {
   currentTracks = [];
   mutedTracks = new Set();
   renderTrackPanel();
-  grid = workRows.map(() => Array(steps).fill(false));
+  freshGrid(workRows.length, steps);
   // Reset UI controls
   (document.getElementById("cfg-steps") as HTMLInputElement).value = "32";
   (document.getElementById("cfg-bpm") as HTMLInputElement).value = "120";
@@ -1064,8 +1107,11 @@ document.getElementById("btn-trim")!.addEventListener("click", () => {
     return;
   }
   const removed = displayPitches.length - usedIndices.length;
-  displayPitches = usedIndices.map((i) => displayPitches[i]);
+  const trimmedRows = usedIndices.map((i) => workRows[i]);
+  setRows(trimmedRows);
   grid = usedIndices.map((i) => grid[i]);
+  attacks = usedIndices.map((i) => attacks[i]);
+  rowTrackIndex = usedIndices.map((i) => rowTrackIndex[i] ?? -1);
   renderRoll();
   status.textContent = `Removed ${removed} empty row${removed > 1 ? "s" : ""} — ${displayPitches.length} rows remaining. Clear to restore full keyboard.`;
 });
@@ -1078,6 +1124,7 @@ document.getElementById("btn-del-first")!.addEventListener("click", () => {
   }
   steps -= 4;
   grid = grid.map((row) => row.slice(4));
+  attacks = attacks.map((row) => row.slice(4));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
   renderRoll();
   status.textContent = `Removed first bar — now ${steps} steps (${steps / 4} bar${steps / 4 !== 1 ? "s" : ""})`;
@@ -1091,6 +1138,7 @@ document.getElementById("btn-del-last")!.addEventListener("click", () => {
   }
   steps -= 4;
   grid = grid.map((row) => row.slice(0, steps));
+  attacks = attacks.map((row) => row.slice(0, steps));
   (document.getElementById("cfg-steps") as HTMLInputElement).value = String(steps);
   renderRoll();
   status.textContent = `Removed last bar — now ${steps} steps (${steps / 4} bar${steps / 4 !== 1 ? "s" : ""})`;
@@ -1784,6 +1832,8 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
 
   // Music grid: the user's notes
   const musicGrid = usedRows.map((i) => grid[i].slice(0, steps).map(Boolean));
+  // Attacks grid: where each note starts (preserves trills and repeats)
+  const attacksGrid = usedRows.map((i) => (attacks[i] || []).slice(0, steps).map(Boolean));
 
   // Extras grid: rebuild from extrasSet, remapping indices to usedRows space
   const extrasGrid: boolean[][] = usedRows.map(() => Array(steps).fill(false));
@@ -1824,6 +1874,25 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
 
   const rowsArr = usedWorkRows.map(fmtRowSound).join(",\n");
 
+  // Only emit attacks if they differ from the implicit "start of each run"
+  // rule — no need to write them for simple puzzles
+  const derivedAttacks = musicGrid.map((row) => {
+    const out = Array(row.length).fill(false);
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] && (c === 0 || !row[c - 1])) out[c] = true;
+    }
+    return out;
+  });
+  const attacksDiffer = attacksGrid.some((row, r) =>
+    row.some((v, c) => v !== derivedAttacks[r][c])
+  );
+
+  const attacksBlock = attacksDiffer
+    ? `  attacks: [\n` +
+      attacksGrid.map((row, i) => `    ${fmtRow(row)}, // ${usedWorkRows[i].label}`).join("\n") + "\n" +
+      `  ],\n`
+    : "";
+
   const tsCode =
     `import type { Puzzle } from "./types";\n\n` +
     `// ${title} — ${musicCount} music cells${extrasCount > 0 ? ` + ${extrasCount} silent extras` : ""}\n` +
@@ -1841,6 +1910,7 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
     `  extras: [\n` +
     extrasGrid.map((row, i) => `    ${fmtRow(row)}, // ${usedWorkRows[i].label}`).join("\n") + "\n" +
     `  ],\n` +
+    attacksBlock +
     `};\n\n` +
     `export default puzzle;\n`;
 
@@ -1850,7 +1920,7 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
     `// Then add to src/puzzles/index.ts:\n` +
     `//   import ${id.replace(/-/g, "_")} from "./${id}";\n` +
     `//   export const PUZZLES = [..., ${id.replace(/-/g, "_")}];\n\n` +
-    `// ${pitches.length} pitches × ${steps} steps · ${musicCount} music + ${extrasCount} extras\n` +
+    `// ${usedWorkRows.length} rows × ${steps} steps · ${musicCount} music + ${extrasCount} extras\n` +
     `// Row clues: ${rowClues.map((c) => `[${c.join(",")}]`).join(", ")}\n` +
     `// Col clues: ${colClues.map((c) => `[${c.join(",")}]`).join(", ")}\n\n` +
     tsCode;
