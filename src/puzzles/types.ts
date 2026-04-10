@@ -6,14 +6,20 @@
  * - `extras`: silent cells added for puzzle solvability (show in clues, no audio)
  *
  * The nonogram clues are computed from the combined pattern (music OR extras).
+ *
+ * Two kinds of puzzles:
+ * - "piano" (default): rows are pitches like "C4", "G3". Plays piano samples.
+ * - "drums": rows are drum sound names from drum-sounds.ts (e.g. "808 Kick").
+ *   Plays drum samples. "pitches" field still stores the row labels.
  */
 export interface Puzzle {
   id: string;
-  title: string; // shown on the level card and after solving
+  title: string;
   composer?: string;
   category?: string;
   difficulty?: "easy" | "medium" | "hard";
-  pitches: string[]; // row labels (top to bottom), e.g. ["C5", "A4", "F4", ...]
+  kind?: "piano" | "drums"; // default: "piano"
+  pitches: string[]; // row labels top-to-bottom
   bpm: number;
   music: boolean[][]; // rows × cols
   extras: boolean[][]; // rows × cols (same dimensions as music)

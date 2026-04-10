@@ -19,6 +19,9 @@ let steps = 16;
 let bpm = 140;
 let swing = 0;
 let grid: boolean[][] = Array.from({ length: NUM_TRACKS }, () => Array(steps).fill(false));
+// extras are silent cells added by Make Solvable, keyed as "row,col" in full grid space
+let extrasSet: Set<string> = new Set();
+let extraRowsSet: Set<number> = new Set();
 let players: Map<string, Tone.Player> = new Map(); // keyed by URL
 let isPlaying = false;
 let looping = false;
@@ -86,6 +89,7 @@ controls.innerHTML = `
   <button id="btn-trim">Trim empty</button>
   <button id="btn-check">Check solvability</button>
   <button id="btn-make-solvable" class="primary">Make solvable</button>
+  <button id="btn-auto-solve">Auto-solve</button>
   <button id="btn-export" class="primary">Export</button>
 </span>
 <div class="config-inline" id="difficulty-wrap" style="display:none;gap:0.5rem;align-items:center;margin-top:0.3rem">
@@ -468,7 +472,9 @@ document.getElementById("btn-make-solvable")!.addEventListener("click", async ()
   exportOutput.textContent = "Finding extras to make it solvable...";
   statusEl.textContent = "Adding extras to make puzzle solvable...";
 
-  // Clear previous extras visual markers
+  // Clear previous extras
+  extrasSet = new Set();
+  extraRowsSet = new Set();
   for (let r = 0; r < cellEls.length; r++) {
     for (let c = 0; c < (cellEls[r]?.length || 0); c++) {
       cellEls[r]?.[c]?.classList.remove("extra-cell");
@@ -478,6 +484,13 @@ document.getElementById("btn-make-solvable")!.addEventListener("click", async ()
   const { extras, iterations } = await makePlayable(musicGrid, 0.5, (msg) => {
     exportOutput.textContent = msg;
   });
+
+  // Store extras in state, mapping solution-space rows to full-grid rows
+  for (const [solR, solC] of extras) {
+    const gridR = usedRows[solR];
+    extrasSet.add(`${gridR},${solC}`);
+    extraRowsSet.add(gridR);
+  }
 
   const musicCount = musicGrid.flat().filter(Boolean).length;
 
@@ -528,7 +541,7 @@ function computeClues(line: boolean[]): number[] {
 document.getElementById("btn-export")!.addEventListener("click", () => {
   const usedRows: number[] = [];
   for (let r = 0; r < grid.length; r++) {
-    if (grid[r]?.some(Boolean)) usedRows.push(r);
+    if (grid[r]?.some(Boolean) || extraRowsSet.has(r)) usedRows.push(r);
   }
   if (usedRows.length === 0) {
     statusEl.textContent = "Place some hits first!";
@@ -536,29 +549,253 @@ document.getElementById("btn-export")!.addEventListener("click", () => {
   }
 
   const names = usedRows.map((i) => ALL_SOUNDS[trackSounds[i]].name);
-  const solution = usedRows.map((i) => grid[i]);
-  const filled = solution.flat().filter(Boolean).length;
+  const musicGrid = usedRows.map((i) => grid[i].slice(0, steps).map(Boolean));
 
-  const rowClues = solution.map((row) => computeClues(row));
+  // Build extras grid from extrasSet (keyed as "row,col" in full grid space)
+  const extrasGrid: boolean[][] = usedRows.map(() => Array(steps).fill(false));
+  for (const key of extrasSet) {
+    const [er, ec] = key.split(",").map(Number);
+    const rowIdx = usedRows.indexOf(er);
+    if (rowIdx >= 0 && ec < steps) extrasGrid[rowIdx][ec] = true;
+  }
+
+  const combined = musicGrid.map((row, r) =>
+    row.map((m, c) => m || extrasGrid[r][c])
+  );
+  const rowClues = combined.map((row) => computeClues(row));
   const colClues: number[][] = [];
   for (let c = 0; c < steps; c++) {
-    colClues.push(computeClues(solution.map((row) => row[c])));
+    colClues.push(computeClues(combined.map((row) => row[c])));
   }
+
+  const title = "My Beat";
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-+$/g, "") || "my-beat";
+  const musicCount = musicGrid.flat().filter(Boolean).length;
+  const extrasCount = extrasGrid.flat().filter(Boolean).length;
+
+  const fmtRow = (row: boolean[]) =>
+    "[" + row.map((v) => (v ? " true" : "false")).join(", ") + "]";
+
+  const pitchesArr = "[" + names.map((n) => `"${n}"`).join(", ") + "]";
+
+  const tsCode =
+    `import type { Puzzle } from "./types";\n\n` +
+    `// ${title} — ${musicCount} hits${extrasCount > 0 ? ` + ${extrasCount} silent extras` : ""}\n` +
+    `const puzzle: Puzzle = {\n` +
+    `  id: "${id}",\n` +
+    `  title: "${title.replace(/"/g, '\\"')}",\n` +
+    `  composer: "",\n` +
+    `  category: "Drums",\n` +
+    `  difficulty: "easy",\n` +
+    `  kind: "drums",\n` +
+    `  pitches: ${pitchesArr},\n` +
+    `  bpm: ${bpm},\n` +
+    `  music: [\n` +
+    musicGrid.map((row, i) => `    ${fmtRow(row)}, // ${names[i]}`).join("\n") + "\n" +
+    `  ],\n` +
+    `  extras: [\n` +
+    extrasGrid.map((row, i) => `    ${fmtRow(row)}, // ${names[i]}`).join("\n") + "\n" +
+    `  ],\n` +
+    `};\n\n` +
+    `export default puzzle;\n`;
 
   exportOutput.style.display = "block";
   exportOutput.textContent =
-    `// Drum pattern\n` +
-    `// ${names.length} sounds × ${steps} steps (${steps / 4} bars), ${filled} hits\n` +
-    `// BPM: ${bpm}, Swing: ${swing}%\n` +
-    `// Sounds: ${names.join(", ")}\n` +
+    `// Paste this into src/puzzles/${id}.ts\n` +
+    `// Then add to src/puzzles/index.ts:\n` +
+    `//   import ${id.replace(/-/g, "_")} from "./${id}";\n` +
+    `//   export const PUZZLES = [..., ${id.replace(/-/g, "_")}];\n\n` +
+    `// ${names.length} tracks × ${steps} steps (${steps / 4} bars) · ${musicCount} hits + ${extrasCount} extras\n` +
+    `// BPM: ${bpm}\n` +
     `// Row clues: ${rowClues.map((c) => `[${c.join(",")}]`).join(", ")}\n` +
     `// Col clues: ${colClues.map((c) => `[${c.join(",")}]`).join(", ")}\n\n` +
-    JSON.stringify({
-      bpm, swing, steps,
-      tracks: usedRows.map((i) => ({ sound: ALL_SOUNDS[trackSounds[i]].name, pattern: grid[i] })),
-    }, null, 2);
+    tsCode;
 
-  statusEl.textContent = `Exported: ${names.length} sounds × ${steps} steps, ${filled} hits`;
+  statusEl.textContent = `Exported: ${names.length} tracks × ${steps} steps, ${musicCount} hits + ${extrasCount} extras`;
+});
+
+// --- Auto-solve ---
+// Starts from a cleared view of the combined pattern (music + extras) and
+// runs the line solver one deduction at a time, triggering sounds for
+// music cells. The user can watch the solver work through the puzzle.
+let autoSolving = false;
+
+document.getElementById("btn-auto-solve")!.addEventListener("click", async () => {
+  const autoBtn = document.getElementById("btn-auto-solve") as HTMLButtonElement;
+  if (autoSolving) {
+    autoSolving = false;
+    autoBtn.textContent = "Auto-solve";
+    return;
+  }
+
+  // Build usedRows from music + extras
+  const usedRows: number[] = [];
+  for (let r = 0; r < grid.length; r++) {
+    if (grid[r]?.some(Boolean) || extraRowsSet.has(r)) usedRows.push(r);
+  }
+  if (usedRows.length === 0) {
+    statusEl.textContent = "Nothing to solve!";
+    return;
+  }
+
+  autoSolving = true;
+  autoBtn.textContent = "Stop";
+  await Tone.start();
+
+  // Build combined pattern (music + extras) for the used rows
+  const musicRows = usedRows.map((i) => grid[i].slice(0, steps).map(Boolean));
+  const combined = musicRows.map((row, r) => [...row]);
+  for (const key of extrasSet) {
+    const [er, ec] = key.split(",").map(Number);
+    const rowIdx = usedRows.indexOf(er);
+    if (rowIdx >= 0 && ec < steps) combined[rowIdx][ec] = true;
+  }
+
+  const rows = combined.length;
+  const cols = steps;
+
+  // Compute clues from combined pattern
+  const rowClues = combined.map((row) => computeClues(row));
+  const colClues: number[][] = [];
+  for (let c = 0; c < cols; c++) {
+    colClues.push(computeClues(combined.map((row) => row[c])));
+  }
+
+  // Clear the actual grid cells visually so the solver paints them fresh
+  for (const r of usedRows) {
+    for (let c = 0; c < cols; c++) {
+      const cell = cellEls[r]?.[c];
+      if (!cell) continue;
+      cell.classList.remove("active", "extra-cell");
+      cell.style.background = "";
+      cell.style.boxShadow = "";
+    }
+  }
+
+  // Placement generator
+  function genPlacements(clues: number[], len: number): boolean[][] {
+    const out: boolean[][] = [];
+    function place(ci: number, pos: number, cur: boolean[]) {
+      if (ci === clues.length) {
+        const line = [...cur];
+        while (line.length < len) line.push(false);
+        out.push(line);
+        return;
+      }
+      const cl = clues[ci];
+      const rem = clues.slice(ci + 1).reduce((a, b) => a + b + 1, 0);
+      const mx = len - cl - rem;
+      for (let s = pos; s <= mx; s++) {
+        const line = [...cur];
+        while (line.length < s) line.push(false);
+        for (let i = 0; i < cl; i++) line.push(true);
+        if (ci < clues.length - 1) line.push(false);
+        place(ci + 1, line.length, line);
+      }
+    }
+    if (!clues.length) out.push(Array(len).fill(false));
+    else place(0, 0, []);
+    return out;
+  }
+
+  function filterLine(ps: boolean[][], known: number[]): boolean[][] {
+    return ps.filter((p) => p.every((v, i) => known[i] === 0 || v === (known[i] === 1)));
+  }
+
+  function deduceLine(ps: boolean[][], len: number): number[] {
+    const r = Array(len).fill(0);
+    if (!ps.length) return r;
+    for (let i = 0; i < len; i++) {
+      if (ps.every((p) => p[i])) r[i] = 1;
+      else if (ps.every((p) => !p[i])) r[i] = -1;
+    }
+    return r;
+  }
+
+  const state: number[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
+  const rowPlacements = rowClues.map((c) => genPlacements(c, cols));
+  const colPlacements = colClues.map((c) => genPlacements(c, rows));
+
+  const delay = 80;
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function applyCell(solR: number, c: number, val: 1 | -1) {
+    const gridR = usedRows[solR];
+    const cell = cellEls[gridR]?.[c];
+    if (!cell) return;
+    if (val === 1) {
+      const isMusic = musicRows[solR][c];
+      const soundName = ALL_SOUNDS[trackSounds[gridR]].name;
+      const color = ALL_SOUNDS[trackSounds[gridR]].color;
+      if (isMusic) {
+        cell.classList.add("active");
+        cell.style.background = color + "66";
+        cell.style.boxShadow = `inset 0 0 8px ${color}44`;
+        const player = getPlayer(gridR);
+        if (player?.loaded) {
+          player.stop();
+          player.start();
+        }
+      } else {
+        cell.classList.add("extra-cell");
+      }
+    } else {
+      // Mark as empty (no visual for drums, just leave blank)
+    }
+  }
+
+  let changed = true;
+  let iter = 0;
+  while (changed && iter < 100 && autoSolving) {
+    changed = false;
+    iter++;
+
+    for (let r = 0; r < rows && autoSolving; r++) {
+      const valid = filterLine(rowPlacements[r], state[r]);
+      rowPlacements[r] = valid;
+      if (!valid.length) { autoSolving = false; break; }
+      const deduced = deduceLine(valid, cols);
+      for (let c = 0; c < cols; c++) {
+        if (state[r][c] === 0 && deduced[c] !== 0) {
+          state[r][c] = deduced[c];
+          applyCell(r, c, deduced[c] as 1 | -1);
+          statusEl.textContent = `Row ${ALL_SOUNDS[trackSounds[usedRows[r]]].name} → beat ${c + 1}`;
+          await sleep(delay);
+          if (!autoSolving) break;
+          changed = true;
+        }
+      }
+    }
+    if (!autoSolving) break;
+
+    for (let c = 0; c < cols && autoSolving; c++) {
+      const known: number[] = [];
+      for (let r = 0; r < rows; r++) known.push(state[r][c]);
+      const valid = filterLine(colPlacements[c], known);
+      colPlacements[c] = valid;
+      if (!valid.length) { autoSolving = false; break; }
+      const deduced = deduceLine(valid, rows);
+      for (let r = 0; r < rows; r++) {
+        if (state[r][c] === 0 && deduced[r] !== 0) {
+          state[r][c] = deduced[r];
+          applyCell(r, c, deduced[r] as 1 | -1);
+          statusEl.textContent = `Col ${c + 1} → ${ALL_SOUNDS[trackSounds[usedRows[r]]].name}`;
+          await sleep(delay);
+          if (!autoSolving) break;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // Tally
+  let unknowns = 0;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (state[r][c] === 0) unknowns++;
+
+  autoSolving = false;
+  autoBtn.textContent = "Auto-solve";
+  if (unknowns === 0) statusEl.textContent = `Solved! (${iter} passes)`;
+  else statusEl.textContent = `Stuck — ${unknowns} cells need look-ahead`;
 });
 
 // --- MIDI Import ---

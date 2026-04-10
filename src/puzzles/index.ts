@@ -1,6 +1,7 @@
 import type { Puzzle } from "./types";
 import twinkle from "./twinkle-twinkle";
 import mary from "./mary-had-a-little-lamb";
+import the_entertainer from "./the-entertainer";
 
 export { type Puzzle, combined, isMusic, isExtra } from "./types";
 
@@ -9,6 +10,7 @@ export { type Puzzle, combined, isMusic, isExtra } from "./types";
 export const PUZZLES: Puzzle[] = [
   twinkle,
   mary,
+  the_entertainer
 ];
 
 export function getPuzzleById(id: string): Puzzle | undefined {
