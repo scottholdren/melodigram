@@ -5,7 +5,9 @@
 }
 
 :root {
-  --cell-size: 28px;
+  --cell-w: 24px;
+  --cell-h: 14px;
+  --key-w: 52px;
 }
 
 body {
@@ -13,15 +15,20 @@ body {
   color: #e0e0e0;
   font-family: system-ui, -apple-system, sans-serif;
   min-height: 100vh;
-  padding: 1.5rem;
+  padding: 1rem;
+  overflow-x: hidden;
 }
 
 #app {
-  max-width: 1200px;
-  margin: 0 auto;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1.2rem;
+  gap: 0.8rem;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 /* --- Header --- */
@@ -32,7 +39,7 @@ body {
 }
 
 .header h1 {
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   font-weight: 300;
   letter-spacing: 0.3em;
   text-transform: uppercase;
@@ -42,20 +49,18 @@ body {
 .header a {
   color: #5566ff;
   text-decoration: none;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
-.header a:hover {
-  text-decoration: underline;
-}
+.header a:hover { text-decoration: underline; }
 
-/* --- Config panel --- */
+/* --- Config --- */
 .config {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.5rem;
+  gap: 1rem;
   align-items: flex-end;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
   background: #12121e;
   border-radius: 8px;
   border: 1px solid #22223a;
@@ -64,12 +69,12 @@ body {
 .config-group {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.2rem;
 }
 
 .config-group label {
-  font-size: 0.7rem;
-  color: #666;
+  font-size: 0.6rem;
+  color: #555;
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
@@ -79,159 +84,204 @@ body {
   background: #1a1a2e;
   color: #ccc;
   border: 1px solid #3a3a5e;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.8rem;
   font-family: monospace;
-  width: 80px;
+  width: 72px;
 }
 
-.config-group select {
-  width: auto;
-}
-
-.config-group input:focus,
-.config-group select:focus {
+.config-group select { width: auto; }
+.config-group input:focus, .config-group select:focus {
   outline: none;
   border-color: #5566ff;
 }
 
-/* --- Pitch selector --- */
-.pitch-selector {
-  padding: 1rem;
-  background: #12121e;
+/* --- MIDI drop zone --- */
+.midi-drop {
+  padding: 0.7rem 1rem;
+  border: 2px dashed #2a2a4a;
   border-radius: 8px;
-  border: 1px solid #22223a;
-}
-
-.pitch-selector h3 {
-  font-size: 0.7rem;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin-bottom: 0.5rem;
-}
-
-.piano-keys {
-  display: flex;
-  gap: 2px;
-  flex-wrap: wrap;
-}
-
-.piano-key {
-  padding: 0.35rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-family: monospace;
-  cursor: pointer;
-  border: 1px solid #333;
-  transition: all 0.15s;
-  min-width: 38px;
   text-align: center;
+  font-size: 0.75rem;
+  color: #555;
+  transition: all 0.2s;
+  cursor: pointer;
 }
 
-.piano-key.white {
-  background: #2a2a3e;
-  color: #aaa;
-}
-
-.piano-key.black {
-  background: #16162a;
-  color: #777;
-}
-
-.piano-key.selected {
+.midi-drop.dragover {
   border-color: #5566ff;
-  background: #2a2a5e;
-  color: #fff;
+  background: #1a1a3e;
+  color: #8899ff;
 }
 
-.piano-key:hover {
-  border-color: #5566ff88;
+.midi-browse {
+  color: #5566ff;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
-/* --- Sequencer grid --- */
-.sequencer-wrap {
-  overflow-x: auto;
-  padding-bottom: 0.5rem;
+/* --- Piano roll --- */
+.roll-container {
+  border: 1px solid #22223a;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0e0e18;
 }
 
-.sequencer {
+.piano-roll {
   display: flex;
   flex-direction: column;
-  gap: 1px;
 }
 
-.seq-row {
+.roll-header {
   display: flex;
-  align-items: center;
-  gap: 1px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0e0e18;
+  border-bottom: 1px solid #22223a;
 }
 
-.seq-label {
-  width: 44px;
-  min-width: 44px;
-  font-size: 0.6rem;
-  font-family: monospace;
-  color: #666;
-  text-align: right;
-  padding-right: 6px;
+.key-spacer {
+  width: var(--key-w);
+  min-width: var(--key-w);
+  flex-shrink: 0;
 }
 
-.seq-cell {
-  width: var(--cell-size);
-  height: var(--cell-size);
-  min-width: var(--cell-size);
-  background: #14141e;
-  border: 1px solid #1e1e30;
-  border-radius: 2px;
-  cursor: pointer;
-  transition: background 0.1s, box-shadow 0.1s;
-}
-
-.seq-cell.even {
-  background: #18182a;
-}
-
-.seq-cell.beat-start {
-  border-left: 2px solid #2a2a4a;
-}
-
-.seq-cell.active {
-  border-color: transparent;
-}
-
-.seq-cell:hover {
-  border-color: #44446a;
-}
-
-/* --- Beat numbers --- */
-.beat-numbers {
+.beat-nums {
   display: flex;
-  gap: 1px;
-  margin-left: 44px;
-  margin-bottom: 2px;
 }
 
 .beat-num {
-  width: var(--cell-size);
-  min-width: var(--cell-size);
-  font-size: 0.55rem;
+  width: var(--cell-w);
+  min-width: var(--cell-w);
+  font-size: 0.5rem;
   font-family: monospace;
   color: #444;
   text-align: center;
+  padding: 2px 0;
 }
 
-/* playhead column highlight */
-.seq-cell.playhead {
-  border-color: #ffffff33;
-  box-shadow: 0 0 8px #ffffff11;
+.roll-body {
+  display: flex;
+  max-height: 55vh;
+  overflow-y: auto;
+  overflow-x: auto;
 }
+
+.piano-keys-col {
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: #0e0e18;
+}
+
+.piano-key {
+  width: var(--key-w);
+  height: var(--cell-h);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 5px;
+  font-size: 0.5rem;
+  font-family: monospace;
+  cursor: pointer;
+  border-bottom: 1px solid #1a1a2a;
+  flex-shrink: 0;
+}
+
+.piano-key.white {
+  background: #1e1e30;
+  color: #666;
+}
+
+.piano-key.black {
+  background: #111120;
+  color: #444;
+}
+
+.piano-key.c-key {
+  color: #888;
+  border-bottom: 1px solid #333;
+}
+
+.piano-key:hover {
+  background: #2a2a4a;
+}
+
+.roll-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+.roll-row {
+  display: flex;
+  height: var(--cell-h);
+  flex-shrink: 0;
+}
+
+.roll-row.black-row .roll-cell {
+  background: #101018;
+}
+
+.roll-row.white-row .roll-cell {
+  background: #141420;
+}
+
+.roll-row.c-row {
+  border-bottom: 1px solid #2a2a3a;
+}
+
+.roll-row.black-row .roll-cell.even-step {
+  background: #131320;
+}
+
+.roll-row.white-row .roll-cell.even-step {
+  background: #171728;
+}
+
+.roll-cell {
+  width: var(--cell-w);
+  min-width: var(--cell-w);
+  height: var(--cell-h);
+  border-right: 1px solid #1a1a28;
+  cursor: pointer;
+  transition: background 0.05s;
+  flex-shrink: 0;
+}
+
+.roll-cell.bar-line {
+  border-left: 1px solid #2a2a4a;
+}
+
+.roll-cell:hover {
+  background: #222240 !important;
+}
+
+.roll-cell.active {
+  border-radius: 2px;
+}
+
+.roll-cell.playhead {
+  box-shadow: inset 0 0 0 1px #ffffff22;
+}
+
+/* Note colors */
+.note-C { background: #ff335566 !important; }
+.note-D { background: #ff883366 !important; }
+.note-E { background: #ffdd3366 !important; }
+.note-F { background: #33dd7766 !important; }
+.note-G { background: #33ccff66 !important; }
+.note-A { background: #5566ff66 !important; }
+.note-B { background: #aa44ff66 !important; }
 
 /* --- Controls --- */
 .controls {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.6rem;
   flex-wrap: wrap;
 }
 
@@ -239,8 +289,8 @@ button {
   background: #1a1a2e;
   color: #ccc;
   border: 1px solid #3a3a5e;
-  padding: 0.5rem 1.2rem;
-  border-radius: 8px;
+  padding: 0.4rem 1rem;
+  border-radius: 7px;
   font-size: 0.8rem;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
@@ -261,36 +311,24 @@ button.primary {
   color: #8899ff;
 }
 
-button.primary:hover {
-  background: #1e1e4e;
+button.primary:hover { background: #1e1e4e; }
+
+.status {
+  font-size: 0.7rem;
+  color: #555;
 }
 
-/* --- Export output --- */
 .export-output {
   background: #0e0e18;
   border: 1px solid #22223a;
   border-radius: 8px;
-  padding: 1rem;
+  padding: 0.75rem;
   font-family: monospace;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   color: #8899ff;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 300px;
+  max-height: 200px;
   overflow-y: auto;
   display: none;
 }
-
-.status {
-  font-size: 0.75rem;
-  color: #555;
-}
-
-/* Note colors */
-.note-C { background: #ff335544; box-shadow: 0 0 8px #ff335522; }
-.note-D { background: #ff883344; box-shadow: 0 0 8px #ff883322; }
-.note-E { background: #ffdd3344; box-shadow: 0 0 8px #ffdd3322; }
-.note-F { background: #33dd7744; box-shadow: 0 0 8px #33dd7722; }
-.note-G { background: #33ccff44; box-shadow: 0 0 8px #33ccff22; }
-.note-A { background: #5566ff44; box-shadow: 0 0 8px #5566ff22; }
-.note-B { background: #aa44ff44; box-shadow: 0 0 8px #aa44ff22; }
